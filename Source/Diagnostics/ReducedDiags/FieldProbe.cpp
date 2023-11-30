@@ -703,53 +703,62 @@ void FieldProbe::WriteToFile (int step) const
 
         // loop over num valid particles to find the lowest particle ID for later sorting
         auto first_id = static_cast<long int>(m_data_out_level[lev][0]);
-        for (long int i = 0; i < m_valid_particles_level[lev]; i++)
-        {
-            if (m_data_out_level[lev][i*noutputs] < first_id)
-                first_id = static_cast<long int>(m_data_out_level[lev][i*noutputs]);
+        for(int cur_lev = lev; cur_lev < nLevel; cur_lev++){
+            for (long int i = 0; i < m_valid_particles_level[lev]; i++)
+            {
+                if (m_data_out_level[cur_lev][i*noutputs] < first_id)
+                    first_id = static_cast<long int>(m_data_out_level[cur_lev][i*noutputs]);
+            }
         }
-
         // Create a new array to store probe data ordered by id, which will be printed to file.
         amrex::Vector<amrex::Real> sorted_data;
-        sorted_data.resize(m_data_out_level[lev].size());
+        for(int cur_lev = lev; cur_lev < nLevel; cur_lev++){
+            sorted_data.resize(sorted_data.size() + m_data_out_level[cur_lev].size());
+        }
+        // loop over num valid particles and write data into the appropriately
+        // sorted location
+        for(int cur_lev = lev; cur_lev < nLevel; cur_lev++){
+            for (long int i = 0; i < m_valid_particles_level[cur_lev]; i++)
+            {
+                const long int idx = static_cast<long int>(m_data_out_level[cur_lev][i*noutputs]) - first_id;
+                for (long int k = 0; k < noutputs; k++)
+                {
+                    sorted_data[idx * noutputs + k] = m_data_out_level[cur_lev][i * noutputs + k];
+                    // sorted_data[i * noutputs + k] = m_data_out_level[cur_lev][i * noutputs + k];
+                }
+            }
+        }
 
-        // // loop over num valid particles and write data into the appropriately
-        // // sorted location
+        // // push back idx
+        // std::vector<long int> idx_vec(m_valid_particles_level[lev]);
+        // std::iota(idx_vec.begin(), idx_vec.end(), 0);
+        // // sort idx as id number(m_data_out_level[lev][i1*noutputs]) order
+        // std::sort (idx_vec.begin(), idx_vec.end(), [&](int i1,int i2){
+        //     return static_cast<long int>(m_data_out_level[lev][i1*noutputs]) <
+        //         static_cast<long int>(m_data_out_level[lev][i2*noutputs]);
+        // });
+        // // push back data
         // for (long int i = 0; i < m_valid_particles_level[lev]; i++)
         // {
-        //     const long int idx = static_cast<long int>(m_data_out_level[lev][i*noutputs]) - first_id;
         //     for (long int k = 0; k < noutputs; k++)
         //     {
         //         // sorted_data[idx * noutputs + k] = m_data_out_level[lev][i * noutputs + k];
-        //         sorted_data[i * noutputs + k] = m_data_out_level[lev][i * noutputs + k];
+        //         sorted_data[i * noutputs + k] = m_data_out_level[lev][idx_vec[i] * noutputs + k];
         //     }
         // }
-
-        // push back idx
-        std::vector<long int> idx_vec(m_valid_particles_level[lev]);
-        std::iota(idx_vec.begin(), idx_vec.end(), 0);
-        // sort idx as id number(m_data_out_level[lev][i1*noutputs]) order
-        std::sort (idx_vec.begin(), idx_vec.end(), [&](int i1,int i2){
-            return static_cast<long int>(m_data_out_level[lev][i1*noutputs]) <
-                static_cast<long int>(m_data_out_level[lev][i2*noutputs]);
-        });
-        // push back data
-        for (long int i = 0; i < m_valid_particles_level[lev]; i++)
-        {
-            for (long int k = 0; k < noutputs; k++)
-            {
-                // sorted_data[idx * noutputs + k] = m_data_out_level[lev][i * noutputs + k];
-                sorted_data[i * noutputs + k] = m_data_out_level[lev][idx_vec[i] * noutputs + k];
-            }
-        }
 
         // open file
         auto filename = lev > 0 ? m_path + m_rd_name + "_lvl_" + std::to_string(lev) + "." + m_extension:
             m_path + m_rd_name + "." + m_extension;
         std::ofstream ofs{filename, std::ofstream::out | std::ofstream::app};
 
+
+        long int total_valid_particles;
+        for(int cur_lev = lev; cur_lev < nLevel; cur_lev++){
+            total_valid_particles += m_valid_particles_level[cur_lev];
+        }
         // loop over num valid particles and write
-        for (long int i = 0; i < m_valid_particles_level[lev]; i++)
+        for (long int i = 0; i < total_valid_particles; i++)
         {
             ofs << std::fixed << std::defaultfloat;
             ofs << step + 1;
