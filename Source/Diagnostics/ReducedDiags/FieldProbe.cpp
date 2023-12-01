@@ -250,7 +250,7 @@ FieldProbe::FieldProbe (std::string rd_name)
     m_valid_particles_level = std::vector<long> (nLevel, 0);
 
     //auto series = openPMD::Series(m_path + m_rd_name + ".h5", io::Access::CREATE);
-    m_Series = std::make_unique<openPMD::Series>(m_path + m_rd_name + ".h5", openPMD::Access::CREATE);
+    // m_Series = std::make_unique<openPMD::Series>(m_path + m_rd_name + ".h5", openPMD::Access::CREATE);
 } // end constructor
 
 void FieldProbe::InitData ()
@@ -701,7 +701,7 @@ void FieldProbe::WriteToFile (int step) const
     const auto max_nLevel = nLevel; //1;
     for(int cur_lev = 0; cur_lev < max_nLevel; cur_lev++){
 
-        if(m_valid_particles_level[cur_lev] == 0) continue;
+        // if(m_valid_particles_level[cur_lev] == 0) continue;
 
         // open file
         auto filename = cur_lev > 0 ? m_path + m_rd_name + "_lvl_" + std::to_string(cur_lev) + "." + m_extension:
@@ -710,7 +710,7 @@ void FieldProbe::WriteToFile (int step) const
 
         long np = 0, data_size = 0;
         // loop over num valid particles to find the lowest particle ID for later sorting
-        auto first_id = static_cast<long int>(m_data_out_level[cur_lev][0]);
+        auto first_id = LONG_MAX; //static_cast<long int>(m_data_out_level[cur_lev][0]);
         for(int lev = cur_lev; lev < nLevel; lev++){
             for (long int i = 0; i < m_valid_particles_level[lev]; i++)
             {
