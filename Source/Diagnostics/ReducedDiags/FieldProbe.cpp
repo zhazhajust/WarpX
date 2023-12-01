@@ -838,7 +838,7 @@ void FieldProbe::WriteToFileOpenPMD (int step) const
                     }else{
                         arg_offset = 0;
                     }
-                    curr.get()[i] = m_data_out_level[lev][i * noutputs + 0];
+                    curr.get()[i] = m_data_out_level[lev][i * noutputs + arg_offset];
                 }
                 unsigned long long offset = 0;
                 currSpecies[components[idx]]["0"].storeChunk(curr, {offset}, {np});
