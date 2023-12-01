@@ -56,10 +56,11 @@ Diagnostics::BaseReadParameters ()
         pp_diag_name, "file_min_digits", m_file_min_digits);
     pp_diag_name.query("format", m_format);
     pp_diag_name.query("dump_last_timestep", m_dump_last_timestep);
-
+    pp_diag_name.query("flush_level", flush_level);
     const amrex::ParmParse pp_geometry("geometry");
     std::string dims;
     pp_geometry.get("dims", dims);
+    pp_diag_name.query("flush_level", flush_level);
 
     // Query list of grid fields to write to output
     const bool varnames_specified = pp_diag_name.queryarr("fields_to_plot", m_varnames_fields);

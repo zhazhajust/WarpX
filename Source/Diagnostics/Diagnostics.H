@@ -21,6 +21,8 @@
 #include <string>
 #include <vector>
 
+#include <climits>
+
 /**
  * \brief base class for diagnostics.
  * Contains main routines to filter, compute and flush diagnostics.
@@ -279,6 +281,8 @@ protected:
     int nmax_lev; /**< max_level to allocate output multifab and vector of field functors. */
     /** Number of levels to be output*/
     int nlev_output;
+    /** Number of levels to be flush*/
+    int flush_level = 1;
     /** Names of species to write to output */
     std::vector< std::string > m_output_species_names;
     /** Names of all species in the simulation */
