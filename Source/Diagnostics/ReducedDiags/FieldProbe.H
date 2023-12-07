@@ -63,7 +63,7 @@ public:
      */
     void ComputeDiags (int step) final;
 
-    void WriteToFileOpenPMD (int step) const;
+    void WriteToFileOpenPMD (int step, std::vector<amrex::Real> sorted_data) const;
 
     /*
      * Define constants used throughout FieldProbe
@@ -133,7 +133,8 @@ private:
     // int max_level = 1;
 
     //
-    std::unique_ptr<openPMD::Series> m_Series;
+    // std::unique_ptr<openPMD::Series> m_Series;
+    // openPMD::Series m_Series;
 
     amrex::Real prob_lo_prev;
 

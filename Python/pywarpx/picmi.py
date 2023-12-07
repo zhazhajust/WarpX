@@ -807,6 +807,10 @@ class Cartesian2DGrid(picmistandard.PICMI_Cartesian2DGrid):
     warpx_end_moving_window_step: int, default=-1
        The timestep at which the moving window ends. If -1, the moving window
        will continue until the end of the simulation.
+
+    warpx_refine_plasma: int, default=0
+        Increase the number of macro-particles that are injected 
+        “ahead” of a mesh refinement patch in a moving window simulation.
     """
     def init(self, kw):
         self.max_grid_size = kw.pop('warpx_max_grid_size', 32)
@@ -826,6 +830,10 @@ class Cartesian2DGrid(picmistandard.PICMI_Cartesian2DGrid):
         self.start_moving_window_step = kw.pop('warpx_start_moving_window_step', None)
         self.end_moving_window_step = kw.pop('warpx_end_moving_window_step', None)
 
+        self.refinement_factor = kw.pop('warpx_refinement_factor', None)
+        # Refinement plasma
+        self.warpx_refine_plasma = kw.pop('warpx_refine_plasma', None)
+        
         # Geometry
         # Set these as soon as the information is available
         # (since these are needed to determine which shared object to load)
@@ -870,9 +878,13 @@ class Cartesian2DGrid(picmistandard.PICMI_Cartesian2DGrid):
             pywarpx.warpx.fine_tag_lo = self.refined_regions[0][1]
             pywarpx.warpx.fine_tag_hi = self.refined_regions[0][2]
             # The refinement_factor is ignored (assumed to be [2,2])
+            if len(self.refinement_factor) == 2:
+                pywarpx.amr.ref_ratio_vect = self.refinement_factor
         else:
             pywarpx.amr.max_level = 0
 
+        if self.warpx_refine_plasma:
+            pywarpx.warpx.refine_plasma = True
 
 class Cartesian3DGrid(picmistandard.PICMI_Cartesian3DGrid):
     """
@@ -928,6 +940,10 @@ class Cartesian3DGrid(picmistandard.PICMI_Cartesian3DGrid):
     warpx_end_moving_window_step: int, default=-1
        The timestep at which the moving window ends. If -1, the moving window
        will continue until the end of the simulation.
+
+    warpx_refine_plasma: int, default=0
+        Increase the number of macro-particles that are injected 
+        “ahead” of a mesh refinement patch in a moving window simulation.
     """
     def init(self, kw):
         self.max_grid_size = kw.pop('warpx_max_grid_size', 32)
@@ -949,6 +965,10 @@ class Cartesian3DGrid(picmistandard.PICMI_Cartesian3DGrid):
         self.start_moving_window_step = kw.pop('warpx_start_moving_window_step', None)
         self.end_moving_window_step = kw.pop('warpx_end_moving_window_step', None)
 
+        self.refinement_factor = kw.pop('warpx_refinement_factor', None)
+        # Refinement plasma
+        self.warpx_refine_plasma = kw.pop('warpx_refine_plasma', None)
+    
         # Geometry
         # Set these as soon as the information is available
         # (since these are needed to determine which shared object to load)
@@ -998,9 +1018,13 @@ class Cartesian3DGrid(picmistandard.PICMI_Cartesian3DGrid):
             pywarpx.warpx.fine_tag_lo = self.refined_regions[0][1]
             pywarpx.warpx.fine_tag_hi = self.refined_regions[0][2]
             # The refinement_factor is ignored (assumed to be [2,2,2])
+            if len(self.refinement_factor) == 3:
+                pywarpx.amr.ref_ratio_vect = self.refinement_factor
         else:
             pywarpx.amr.max_level = 0
 
+        if self.warpx_refine_plasma:
+            pywarpx.warpx.refine_plasma = True
 
 class ElectromagneticSolver(picmistandard.PICMI_ElectromagneticSolver):
     """
@@ -2125,6 +2149,15 @@ class FieldDiagnostic(picmistandard.PICMI_FieldDiagnostic, WarpXDiagnosticBase):
         Species for which to calculate particle_fields_to_plot functions. Fields will
         be calculated separately for each specified species. If not passed, default is
         all of the available particle species.
+
+    warpx_diag_lo: float, optional
+        The low cornor of diagnostics.
+
+    warpx_diag_hi: float, optional
+        The high cornor of diagnostics.
+
+    warpx_flush_level: float, optional
+        The max level for output
     """
     def init(self, kw):
 
@@ -2140,6 +2173,10 @@ class FieldDiagnostic(picmistandard.PICMI_FieldDiagnostic, WarpXDiagnosticBase):
         self.particle_fields_to_plot = kw.pop('warpx_particle_fields_to_plot', [])
         self.particle_fields_species = kw.pop('warpx_particle_fields_species', None)
 
+        self.field_diag_hi = kw.pop('warpx_diag_hi', None)
+        self.field_diag_lo = kw.pop('warpx_diag_lo', None)
+        self.flush_level = kw.pop('warpx_flush_level', None)
+
     def initialize_inputs(self):
 
         self.add_diagnostic()
@@ -2150,8 +2187,12 @@ class FieldDiagnostic(picmistandard.PICMI_FieldDiagnostic, WarpXDiagnosticBase):
         self.diagnostic.file_min_digits = self.file_min_digits
         self.diagnostic.dump_rz_modes = self.dump_rz_modes
         self.diagnostic.intervals = self.period
-        self.diagnostic.diag_lo = self.lower_bound
-        self.diagnostic.diag_hi = self.upper_bound
+        # self.diagnostic.diag_lo = self.lower_bound
+        # self.diagnostic.diag_hi = self.upper_bound
+        self.diagnostic.diag_hi = self.field_diag_hi
+        self.diagnostic.diag_lo = self.field_diag_lo
+        self.diagnostic.flush_level = self.flush_level
+
         if self.number_of_cells is not None:
             self.diagnostic.coarsening_ratio = (np.array(self.grid.number_of_cells)/np.array(self.number_of_cells)).astype(int)
 
@@ -2712,6 +2753,12 @@ class ReducedDiagnostic(picmistandard.base._ClassWithInit, WarpXDiagnosticBase):
 
     target_up_x, target_up_y, target_up_z: floats
         For diagnostic type 'FieldProbe', the vector specifying up in the 'Plane'
+
+    start_step, stop_step: floats, optional
+        Timestep that Start/Stop probe the field 
+
+    stop_move_step: floats, optional
+        If do_moving_window_FP is True, the fieldprobe particles will stop move after stop_move_step
     """
 
     def __init__(self, diag_type, name=None, period=1, path=None,
@@ -2771,7 +2818,9 @@ class ReducedDiagnostic(picmistandard.base._ClassWithInit, WarpXDiagnosticBase):
         self.interp_order = kw.pop("interp_order", None)
         self.integrate = kw.pop("integrate", None)
         self.do_moving_window_FP = kw.pop("do_moving_window_FP", None)
-
+        self.start_step = kw.pop("start_step", None)
+        self.stop_step = kw.pop("stop_step", None)
+        self.stop_move_step = kw.pop("stop_move_step", None)
         if self.probe_geometry.lower() != 'point':
             self.resolution = kw.pop("resolution")
 

@@ -203,7 +203,8 @@ FieldProbe::FieldProbe (std::string rd_name)
                     {FieldProbePIdx::S , "-(W/m^2)"}
                 };
             }
-            for (int lev = 0; lev < nLevel; ++lev)
+            // for (int lev = 0; lev < nLevel; ++lev)
+            for (int lev = 0; lev < 1; ++lev)
             {
                 auto filename = lev > 0 ? m_path + m_rd_name + "_lvl_" + std::to_string(lev) + "." + m_extension:
                     m_path + m_rd_name + "." + m_extension;
@@ -250,7 +251,6 @@ FieldProbe::FieldProbe (std::string rd_name)
     m_valid_particles_level = std::vector<long> (nLevel, 0);
 
     //auto series = openPMD::Series(m_path + m_rd_name + ".h5", io::Access::CREATE);
-    // m_Series = std::make_unique<openPMD::Series>(m_path + m_rd_name + ".h5", openPMD::Access::CREATE);
 } // end constructor
 
 void FieldProbe::InitData ()
@@ -358,7 +358,9 @@ void FieldProbe::InitData ()
     // Prev lo
     // compute move
     // get a reference to WarpX instance
-    prob_lo_prev = WarpX::GetInstance().Geom(0).ProbLo()[WarpX::moving_window_dir];
+    //prob_lo_prev = WarpX::GetInstance().Geom(0).ProbLo()[WarpX::moving_window_dir];
+    auto & warpx = WarpX::GetInstance();
+    prob_lo_prev = warpx.getmoving_window_x();
 }
 
 void FieldProbe::LoadBalance ()
@@ -427,13 +429,19 @@ void FieldProbe::ComputeDiags (int step)
             const int step_diff = step - m_last_compute_step;
             move_dist = dt*WarpX::moving_window_v*step_diff;
             if(lev == 0){
-                // compute move
-                // get a reference to WarpX instance
-                const auto prob_lo = WarpX::GetInstance().Geom(0).ProbLo()[WarpX::moving_window_dir];
+                // // compute move
+                // // get a reference to WarpX instance
+                // const auto prob_lo = WarpX::GetInstance().Geom(0).ProbLo()[WarpX::moving_window_dir];
+                // amrex::Real probe_move = prob_lo - prob_lo_prev;
+                // prob_lo_prev = prob_lo;
+
+                auto & warpx = WarpX::GetInstance();
+                // const int moving_dir = WarpX::moving_window_dir;
+                const auto prob_lo = warpx.getmoving_window_x();
                 amrex::Real probe_move = prob_lo - prob_lo_prev;
                 prob_lo_prev = prob_lo;
 
-                // move_dist = probe_move;
+                move_dist = probe_move;
 
                 const auto temp_warpx_moving_window = WarpX::moving_window_dir;
                 if (temp_warpx_moving_window == 0)
@@ -698,7 +706,8 @@ void FieldProbe::WriteToFile (int step) const
     auto & warpx = WarpX::GetInstance();
     const auto nLevel = warpx.finestLevel() + 1;
     // const auto nLevel = warpx.finestLevel() + 1 > max_level + 1 ? max_level + 1 : warpx.finestLevel() + 1;
-    const auto max_nLevel = nLevel; //1;
+    // const auto max_nLevel = nLevel;
+    const auto max_nLevel = 1;
     for(int cur_lev = 0; cur_lev < max_nLevel; cur_lev++){
 
         // if(m_valid_particles_level[cur_lev] == 0) continue;
@@ -780,71 +789,168 @@ void FieldProbe::WriteToFile (int step) const
         } // end loop over data size
         // close file
         ofs.close();
+        // if(cur_lev == 0) this->WriteToFileOpenPMD(step, sorted_data);
     }
-    //this->WriteToFileOpenPMD(step);
 }
 
-void FieldProbe::WriteToFileOpenPMD (int step) const
+void FieldProbe::WriteToFileOpenPMD (int step, std::vector<amrex::Real> sorted_data) const
 {
-    if (!(ProbeInDomain() && amrex::ParallelDescriptor::IOProcessor())) return;
-    if (!(step >= start_step - 1 && step <= stop_step)) return;
+    // if (!(ProbeInDomain() && amrex::ParallelDescriptor::IOProcessor())) return;
+    // if (!(step >= start_step - 1 && step <= stop_step)) return;
+
+    //m_Series = std::make_unique<openPMD::Series>(m_path + "/" + std::to_string(step) + "/" + m_rd_name + ".h5", openPMD::Access::CREATE);
+    auto m_Series = openPMD::Series(m_path + "/h5dump/" + m_rd_name + "_" + std::to_string(step + 1) + ".h5", openPMD::Access::CREATE);
+
+    // int data_size = sorted_data.size();
+    int np = 0;
 
     auto & warpx = WarpX::GetInstance();
     const auto nLevel = warpx.finestLevel() + 1;
-    unsigned long np = 0;
     for(int lev = 0; lev < nLevel; lev++){
-        np += static_cast<unsigned long> (m_valid_particles_level[lev]);
+        //np += static_cast<unsigned long> (m_valid_particles_level[lev]);
+        np += static_cast<int> (m_valid_particles_level[lev]);
     }
 
-    openPMD::Iteration currIteration = m_Series->writeIterations()[step + 1];
+    openPMD::Iteration currIteration = m_Series.iterations[step+1];
     openPMD::ParticleSpecies currSpecies = currIteration.particles["species"];
+    currIteration.setTime(WarpX::GetInstance().gett_new(0));
 
-    const std::shared_ptr<amrex::Real> curr(
-        new amrex::ParticleReal[np], 
-        [](amrex::ParticleReal const *p) { delete[] p; }
+    const std::shared_ptr<float> curr(
+        new float[np], [](float const *p) { 
+            delete[] p; 
+            p = nullptr;
+        }
     );
-
-    std::string options = "{}";
-    auto realType = openPMD::Dataset(openPMD::determineDatatype<amrex::Real>(), {np}, options);
-    auto idType = openPMD::Dataset(openPMD::determineDatatype<amrex::Real>(), {np}, options);
+    openPMD::Datatype dtype = openPMD::determineDatatype(curr);
+    auto d = openPMD::Dataset(dtype, {(uint64_t) np});
+    // std::string options = "{}";
+    // auto realType = openPMD::Dataset(openPMD::determineDatatype<amrex::ParticleReal>(), openPMD::Extent{np}); //, options);
+    // auto idType = openPMD::Dataset(openPMD::determineDatatype<amrex::ParticleReal>(), openPMD::Extent{np}); //, options);
 
     std::vector<std::string> const positionComponents = {"x", "y", "z"};
 
     for(auto const& comp : positionComponents) {
-        currSpecies["position"][comp].resetDataset(realType);
-        currSpecies["E"][comp].resetDataset(realType);
-        currSpecies["B"][comp].resetDataset(realType);
+        currSpecies["position"][comp].resetDataset(d);
+        currSpecies["E"][comp].resetDataset(d);
+        currSpecies["B"][comp].resetDataset(d);
     }
     // auto const scalar = openPMD::RecordComponent::SCALAR;
-    currSpecies["S"]["0"].resetDataset(realType);
-    currSpecies["id"]["0"].resetDataset(idType);
+    currSpecies["S"]["S"].resetDataset(d);
+    currSpecies["id"]["id"].resetDataset(d);
+
+    m_Series.flush();
+
     std::vector<std::string> const components = {"position", "E", "B", "S", "id"};
-    for(int lev = 0; lev < nLevel; lev++){
-        for(int idx = 0; idx < components.size(); idx++){
-            if(idx < 3){
-                for (auto currDim = 0; currDim < 3; currDim++) {
-                    for (auto i = 0; i < static_cast<int> (np); i++) {
-                        int arg_offset = 1 + idx * 3 + currDim;
-                        curr.get()[i] = m_data_out_level[lev][i * noutputs + arg_offset];
-                    }
-                    unsigned long long offset = 0;
-                    currSpecies[components[idx]][positionComponents[currDim]].storeChunk(curr, {offset}, {np});
+
+    for(int idx = 0; idx < components.size(); idx++){
+        if(idx < 3){
+            for (auto currDim = 0; currDim < 3; currDim++) {
+                for (auto i = 0; i < static_cast<int> (np); i++) {
+                    int arg_offset = 1 + idx * 3 + currDim;
+                    curr.get()[i] = static_cast<float> (sorted_data[i * noutputs + arg_offset]);
                 }
-            }else{
-                for (int i = 0; i < static_cast<int> (np); i++) {
-                    int arg_offset;
-                    if(idx == 3){
-                        arg_offset = 10;
-                    }else{
-                        arg_offset = 0;
-                    }
-                    curr.get()[i] = m_data_out_level[lev][i * noutputs + arg_offset];
-                }
-                unsigned long long offset = 0;
-                currSpecies[components[idx]]["0"].storeChunk(curr, {offset}, {np});
+                //unsigned long long offset = 0;
+                uint64_t offset = 0;
+                currSpecies[components[idx]][positionComponents[currDim]]
+                    .storeChunk(curr, openPMD::Offset{offset}, openPMD::Extent{(uint64_t) np});
+                m_Series.flush();
             }
+        }else{
+            for (int i = 0; i < static_cast<int> (np); i++) {
+                int arg_offset;
+                if(idx == 3){
+                    arg_offset = 10;
+                }else{
+                    arg_offset = 0;
+                }
+                curr.get()[i] = static_cast<float> (sorted_data[i * noutputs + arg_offset]);
+            }
+            // unsigned long long offset = 0;
+            uint64_t offset = 0;
+            currSpecies[components[idx]][components[idx]]
+                .storeChunk(curr, openPMD::Offset{offset}, openPMD::Extent{(uint64_t) np});
+            m_Series.flush();
         }
     }
+    m_Series.flush();
     currIteration.close();
-    m_Series->flush();
+    m_Series.close();
+
+    ////////////////////////////////////////////
+
+    // auto & warpx = WarpX::GetInstance();
+    // const auto nLevel = warpx.finestLevel() + 1;
+    // // unsigned long np = 0;
+    // int np = 0;
+    // for(int lev = 0; lev < nLevel; lev++){
+    //     //np += static_cast<unsigned long> (m_valid_particles_level[lev]);
+    //     np += static_cast<int> (m_valid_particles_level[lev]);
+    // }
+
+    // //openPMD::Iteration currIteration = m_Series->writeIterations()[step + 1];
+
+    // openPMD::Iteration currIteration = m_Series.iterations[step+1];
+    // openPMD::ParticleSpecies currSpecies = currIteration.particles["species"];
+
+    // const std::shared_ptr<float> curr(
+    //     new float[np], [](float const *p) { 
+    //         delete[] p; 
+    //         p = nullptr;
+    //     }
+    // );
+    // openPMD::Datatype dtype = openPMD::determineDatatype(curr);
+    // auto d = openPMD::Dataset(dtype, {(uint64_t) np});
+    // // std::string options = "{}";
+    // // auto realType = openPMD::Dataset(openPMD::determineDatatype<amrex::ParticleReal>(), openPMD::Extent{np}); //, options);
+    // // auto idType = openPMD::Dataset(openPMD::determineDatatype<amrex::ParticleReal>(), openPMD::Extent{np}); //, options);
+
+    // std::vector<std::string> const positionComponents = {"x", "y", "z"};
+
+    // for(auto const& comp : positionComponents) {
+    //     currSpecies["position"][comp].resetDataset(d);
+    //     currSpecies["E"][comp].resetDataset(d);
+    //     currSpecies["B"][comp].resetDataset(d);
+    // }
+    // // auto const scalar = openPMD::RecordComponent::SCALAR;
+    // currSpecies["S"]["S"].resetDataset(d);
+    // currSpecies["id"]["id"].resetDataset(d);
+
+    // m_Series.flush();
+
+    // std::vector<std::string> const components = {"position", "E", "B", "S", "id"};
+    // for(int lev = 0; lev < nLevel; lev++){
+    //     for(int idx = 0; idx < components.size(); idx++){
+    //         if(idx < 3){
+    //             for (auto currDim = 0; currDim < 3; currDim++) {
+    //                 for (auto i = 0; i < static_cast<int> (np); i++) {
+    //                     int arg_offset = 1 + idx * 3 + currDim;
+    //                     curr.get()[i] = static_cast<float> (m_data_out_level[lev][i * noutputs + arg_offset]);
+    //                 }
+    //                 //unsigned long long offset = 0;
+    //                 uint64_t offset = 0;
+    //                 currSpecies[components[idx]][positionComponents[currDim]]
+    //                     .storeChunk(curr, openPMD::Offset{offset}, openPMD::Extent{(uint64_t) np});
+    //                 m_Series.flush();
+    //             }
+    //         }else{
+    //             for (int i = 0; i < static_cast<int> (np); i++) {
+    //                 int arg_offset;
+    //                 if(idx == 3){
+    //                     arg_offset = 10;
+    //                 }else{
+    //                     arg_offset = 0;
+    //                 }
+    //                 curr.get()[i] = static_cast<float> (m_data_out_level[lev][i * noutputs + arg_offset]);
+    //             }
+    //             // unsigned long long offset = 0;
+    //             uint64_t offset = 0;
+    //             currSpecies[components[idx]][components[idx]]
+    //                 .storeChunk(curr, openPMD::Offset{offset}, openPMD::Extent{(uint64_t) np});
+    //             m_Series.flush();
+    //         }
+    //     }
+    // }
+    // m_Series.flush();
+    // currIteration.close();
+    // m_Series.close();
 }
