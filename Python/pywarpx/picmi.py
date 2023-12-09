@@ -1842,6 +1842,9 @@ class Simulation(picmistandard.PICMI_Simulation):
     warpx_sort_bin_size: list of int, optional (default 1 1 1)
         If `sort_intervals` is activated and `sort_particles_for_deposition` is false, particles are sorted in bins of `sort_bin_size` cells.
         In 2D, only the first two elements are read.
+
+    warpx_omp_threads: int, optional
+        The openmp threads used for simulation.
     """
 
     # Set the C++ WarpX interface (see _libwarpx.LibWarpX) as an extension to
@@ -1894,6 +1897,7 @@ class Simulation(picmistandard.PICMI_Simulation):
 
         self.inputs_initialized = False
         self.warpx_initialized = False
+        self.amrex_omp_threads = kw.pop('warpx_omp_threads', None)
 
     def initialize_inputs(self):
         if self.inputs_initialized:
@@ -2019,6 +2023,9 @@ class Simulation(picmistandard.PICMI_Simulation):
 
         if self.amrex_use_gpu_aware_mpi is not None:
             pywarpx.amrex.use_gpu_aware_mpi = self.amrex_use_gpu_aware_mpi
+
+        if self.amrex_omp_threads is not None:
+            pywarpx.amrex.omp_threads = self.amrex_omp_threads
 
     def initialize_warpx(self, mpi_comm=None):
         if self.warpx_initialized:

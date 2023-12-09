@@ -458,14 +458,31 @@ void FieldProbe::ComputeDiags (int step)
                 }
             }
         }
+        const amrex::MultiFab& (WarpX::*getEfieldFunc) (int lev, int direction);
+        const amrex::MultiFab& (WarpX::*getBfieldFunc) (int lev, int direction);
+
+        // if(lev == 0){
+        //     // getEfieldFunc = &WarpX::getEfield_fp;
+        //     // getBfieldFunc = &WarpX::getBfield_fp;
+        //     getEfieldFunc = &WarpX::getEfield;
+        //     getBfieldFunc = &WarpX::getBfield;
+        // }else{
+        //     // getEfieldFunc = &WarpX::getEfield_cp;
+        //     // getBfieldFunc = &WarpX::getBfield_cp;
+        //     getEfieldFunc = &WarpX::getEfield;
+        //     getBfieldFunc = &WarpX::getBfield;
+        // }
+
+        getEfieldFunc = &WarpX::getEfield;
+        getBfieldFunc = &WarpX::getBfield;
 
         // get MultiFab data at lev
-        const amrex::MultiFab &Ex = warpx.getEfield(lev, 0);
-        const amrex::MultiFab &Ey = warpx.getEfield(lev, 1);
-        const amrex::MultiFab &Ez = warpx.getEfield(lev, 2);
-        const amrex::MultiFab &Bx = warpx.getBfield(lev, 0);
-        const amrex::MultiFab &By = warpx.getBfield(lev, 1);
-        const amrex::MultiFab &Bz = warpx.getBfield(lev, 2);
+        const amrex::MultiFab &Ex = (warpx.*getEfieldFunc)(lev, 0);
+        const amrex::MultiFab &Ey = (warpx.*getEfieldFunc)(lev, 1);
+        const amrex::MultiFab &Ez = (warpx.*getEfieldFunc)(lev, 2);
+        const amrex::MultiFab &Bx = (warpx.*getBfieldFunc)(lev, 0);
+        const amrex::MultiFab &By = (warpx.*getBfieldFunc)(lev, 1);
+        const amrex::MultiFab &Bz = (warpx.*getBfieldFunc)(lev, 2);
 
         /*
          * Prepare interpolation of field components to probe_position

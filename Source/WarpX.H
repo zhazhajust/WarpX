@@ -497,6 +497,9 @@ public:
     const amrex::MultiFab& getEfield  (int lev, int direction) {return *Efield_aux[lev][direction];}
     const amrex::MultiFab& getBfield  (int lev, int direction) {return *Bfield_aux[lev][direction];}
 
+    const amrex::MultiFab& getEfield_cax  (int lev, int direction) {return *Efield_cax[lev][direction];}
+    const amrex::MultiFab& getBfield_cax  (int lev, int direction) {return *Bfield_cax[lev][direction];}
+
     const amrex::MultiFab& getcurrent_cp (int lev, int direction) {return *current_cp[lev][direction];}
     const amrex::MultiFab& getEfield_cp  (int lev, int direction) {return  *Efield_cp[lev][direction];}
     const amrex::MultiFab& getBfield_cp  (int lev, int direction) {return  *Bfield_cp[lev][direction];}
