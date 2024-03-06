@@ -311,6 +311,7 @@ void FieldProbe::InitData ()
                 orthotarget[0] - target_up_x,
                 orthotarget[1] - target_up_y,
                 orthotarget[2] - target_up_z};
+            // normalize(direction[0], direction[1], direction[2]);
             normalize(direction[0], direction[1], direction[2]);
             const amrex::Real uppercorner[3]{
                 x_probe - (direction[0] * detector_radius),

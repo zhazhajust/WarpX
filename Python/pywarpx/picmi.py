@@ -2165,6 +2165,12 @@ class FieldDiagnostic(picmistandard.PICMI_FieldDiagnostic, WarpXDiagnosticBase):
 
     warpx_flush_level: float, optional
         The max level for output
+
+    warpx_coarsening_ratio: list of float, optional
+        Reduce size of the field output by this ratio in each dimension.
+
+    warpx_max_move_step: int, optional
+        The max moving step.
     """
     def init(self, kw):
 
@@ -2183,7 +2189,8 @@ class FieldDiagnostic(picmistandard.PICMI_FieldDiagnostic, WarpXDiagnosticBase):
         self.field_diag_hi = kw.pop('warpx_diag_hi', None)
         self.field_diag_lo = kw.pop('warpx_diag_lo', None)
         self.flush_level = kw.pop('warpx_flush_level', None)
-
+        self.coarsening_ratio = kw.pop('warpx_coarsening_ratio', None)
+        self.max_move_step = kw.pop('warpx_max_move_step', None)
     def initialize_inputs(self):
 
         self.add_diagnostic()
@@ -2199,7 +2206,8 @@ class FieldDiagnostic(picmistandard.PICMI_FieldDiagnostic, WarpXDiagnosticBase):
         self.diagnostic.diag_hi = self.field_diag_hi
         self.diagnostic.diag_lo = self.field_diag_lo
         self.diagnostic.flush_level = self.flush_level
-
+        self.diagnostic.coarsening_ratio = self.coarsening_ratio
+        self.diagnostic.max_move_step = self.max_move_step
         if self.number_of_cells is not None:
             self.diagnostic.coarsening_ratio = (np.array(self.grid.number_of_cells)/np.array(self.number_of_cells)).astype(int)
 
