@@ -18,8 +18,8 @@ using namespace amrex::literals;
 bool
 PEC::isAnyBoundaryPEC() {
     for (int idim = 0; idim < AMREX_SPACEDIM; ++idim) {
-        if ( WarpX::field_boundary_lo[idim] == FieldBoundaryType::PEC) return true;
-        if ( WarpX::field_boundary_hi[idim] == FieldBoundaryType::PEC) return true;
+        if ( WarpX::field_boundary_lo[idim] == FieldBoundaryType::PEC) { return true; }
+        if ( WarpX::field_boundary_hi[idim] == FieldBoundaryType::PEC) { return true; }
     }
     return false;
 }
@@ -250,8 +250,8 @@ PEC::ApplyPECtoRhofield (amrex::MultiFab* rho, const int lev, PatchType patch_ty
     for (int idim=0; idim < AMREX_SPACEDIM; ++idim) {
         is_pec[idim][0] = WarpX::field_boundary_lo[idim] == FieldBoundaryType::PEC;
         is_pec[idim][1] = WarpX::field_boundary_hi[idim] == FieldBoundaryType::PEC;
-        if (!is_pec[idim][0]) grown_domain_box.growLo(idim, ng_fieldgather[idim]);
-        if (!is_pec[idim][1]) grown_domain_box.growHi(idim, ng_fieldgather[idim]);
+        if (!is_pec[idim][0]) { grown_domain_box.growLo(idim, ng_fieldgather[idim]); }
+        if (!is_pec[idim][1]) { grown_domain_box.growHi(idim, ng_fieldgather[idim]); }
 
         // rho values inside guard cells are updated the same as tangential
         // components of the current density
@@ -276,7 +276,7 @@ PEC::ApplyPECtoRhofield (amrex::MultiFab* rho, const int lev, PatchType patch_ty
 
         // If grown_domain_box contains fabbox it means there are no PEC
         // boundaries to handle so continue to next box
-        if (grown_domain_box.contains(fabbox)) continue;
+        if (grown_domain_box.contains(fabbox)) { continue; }
 
         // Extract field data
         auto const& rho_array = rho->array(mfi);
@@ -342,8 +342,8 @@ PEC::ApplyPECtoJfield(amrex::MultiFab* Jx, amrex::MultiFab* Jy,
     for (int idim=0; idim < AMREX_SPACEDIM; ++idim) {
         is_pec[idim][0] = WarpX::field_boundary_lo[idim] == FieldBoundaryType::PEC;
         is_pec[idim][1] = WarpX::field_boundary_hi[idim] == FieldBoundaryType::PEC;
-        if (!is_pec[idim][0]) grown_domain_box.growLo(idim, ng_fieldgather[idim]);
-        if (!is_pec[idim][1]) grown_domain_box.growHi(idim, ng_fieldgather[idim]);
+        if (!is_pec[idim][0]) { grown_domain_box.growLo(idim, ng_fieldgather[idim]); }
+        if (!is_pec[idim][1]) { grown_domain_box.growHi(idim, ng_fieldgather[idim]); }
 
         for (int icomp=0; icomp < 3; ++icomp) {
             // Set the psign value correctly for each current component for each
@@ -398,7 +398,7 @@ PEC::ApplyPECtoJfield(amrex::MultiFab* Jx, amrex::MultiFab* Jy,
         // If grown_domain_box contains fabbox it means there are no PEC
         // boundaries to handle so continue to next box
         grown_domain_box.convert(Jx_nodal);
-        if (grown_domain_box.contains(fabbox)) continue;
+        if (grown_domain_box.contains(fabbox)) { continue; }
 
         // Extract field data
         auto const& Jx_array = Jx->array(mfi);
@@ -433,7 +433,7 @@ PEC::ApplyPECtoJfield(amrex::MultiFab* Jx, amrex::MultiFab* Jy,
         // If grown_domain_box contains fabbox it means there are no PEC
         // boundaries to handle so continue to next box
         grown_domain_box.convert(Jy_nodal);
-        if (grown_domain_box.contains(fabbox)) continue;
+        if (grown_domain_box.contains(fabbox)) { continue; }
 
         // Extract field data
         auto const& Jy_array = Jy->array(mfi);
@@ -468,7 +468,7 @@ PEC::ApplyPECtoJfield(amrex::MultiFab* Jx, amrex::MultiFab* Jy,
         // If grown_domain_box contains fabbox it means there are no PEC
         // boundaries to handle so continue to next box
         grown_domain_box.convert(Jz_nodal);
-        if (grown_domain_box.contains(fabbox)) continue;
+        if (grown_domain_box.contains(fabbox)) { continue; }
 
         // Extract field data
         auto const& Jz_array = Jz->array(mfi);
@@ -500,7 +500,7 @@ PEC::ApplyPECtoElectronPressure (amrex::MultiFab* Pefield, const int lev,
 
     amrex::Box domain_box = warpx.Geom(lev).Domain();
     if (patch_type == PatchType::coarse) {
-        amrex::IntVect ref_ratio = ( (lev > 0) ? WarpX::RefRatio(lev-1) : amrex::IntVect(1) );
+        const amrex::IntVect ref_ratio = ( (lev > 0) ? WarpX::RefRatio(lev-1) : amrex::IntVect(1) );
         domain_box.coarsen(ref_ratio);
     }
     domain_box.convert(Pefield->ixType());
@@ -520,8 +520,8 @@ PEC::ApplyPECtoElectronPressure (amrex::MultiFab* Pefield, const int lev,
     for (int idim=0; idim < AMREX_SPACEDIM; ++idim) {
         is_pec[idim][0] = WarpX::field_boundary_lo[idim] == FieldBoundaryType::PEC;
         is_pec[idim][1] = WarpX::field_boundary_hi[idim] == FieldBoundaryType::PEC;
-        if (!is_pec[idim][0]) grown_domain_box.growLo(idim, ng_fieldgather[idim]);
-        if (!is_pec[idim][1]) grown_domain_box.growHi(idim, ng_fieldgather[idim]);
+        if (!is_pec[idim][0]) { grown_domain_box.growLo(idim, ng_fieldgather[idim]); }
+        if (!is_pec[idim][1]) { grown_domain_box.growHi(idim, ng_fieldgather[idim]); }
 
         mirrorfac[idim][0] = 2*domain_lo[idim] - (1 - Pe_nodal[idim]);
         mirrorfac[idim][1] = 2*domain_hi[idim] + (1 - Pe_nodal[idim]);
@@ -538,7 +538,7 @@ PEC::ApplyPECtoElectronPressure (amrex::MultiFab* Pefield, const int lev,
 
         // If grown_domain_box contains fabbox it means there are no PEC
         // boundaries to handle so continue to next box
-        if (grown_domain_box.contains(fabbox)) continue;
+        if (grown_domain_box.contains(fabbox)) { continue; }
 
         // Extract field data
         auto const& Pe_array = Pefield->array(mfi);
@@ -552,7 +552,7 @@ PEC::ApplyPECtoElectronPressure (amrex::MultiFab* Pefield, const int lev,
             amrex::ignore_unused(j,k);
 #endif
             // Store the array index
-            amrex::IntVect iv(AMREX_D_DECL(i,j,k));
+            const amrex::IntVect iv(AMREX_D_DECL(i,j,k));
 
             PEC::SetNeumannOnPEC(n, iv, Pe_array, mirrorfac, is_pec, fabbox);
         });

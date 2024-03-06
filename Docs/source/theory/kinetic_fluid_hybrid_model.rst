@@ -18,8 +18,8 @@ has to resolve the electron Debye length and CFL-condition based on the speed
 of light.
 
 Many authors have described variations of the kinetic ion & fluid electron model,
-generally referred to as particle-fluid hybrid or just hybrid-PIC models. The implementation
-in WarpX follows the outline from :cite:t:`c-winske2022hybrid`.
+generally referred to as particle-fluid hybrid or just hybrid-PIC models. The
+implementation in WarpX is described in detail in :cite:t:`kfhm-Groenewald2023`.
 This description follows mostly from that reference.
 
 Model
@@ -29,7 +29,7 @@ The basic justification for the hybrid model is that the system to which it is
 applied is dominated by ion kinetics, with ions moving much slower than electrons
 and photons. In this scenario two critical approximations can be made, namely,
 neutrality (:math:`n_e=n_i`) and the Maxwell-Ampere equation can be simplified by
-neglecting the displacement current term :cite:p:`c-NIELSON1976`, giving,
+neglecting the displacement current term :cite:p:`kfhm-Nielson1976`, giving,
 
     .. math::
 
@@ -116,8 +116,7 @@ be interpolated to the correct time, using :math:`\vec{J}_i^n = 1/2(\vec{J}_i^{n
 The electron pressure is simply calculated using :math:`\rho^n` and the B-field is also already
 known at the correct time since it was calculated for :math:`t=t_n` at the end of the last step.
 Once :math:`\vec{E}^n` is calculated, it is used to push :math:`\vec{B}^n` forward in time
-(using the Maxwell-Faraday equation, i.e. the same as in the regular PIC routine with ``WarpX::EvolveB()``)
-to :math:`\vec{B}^{n+1/2}`.
+(using the Maxwell-Faraday equation) to :math:`\vec{B}^{n+1/2}`.
 
 Second half step
 """"""""""""""""
@@ -147,10 +146,11 @@ Sub-stepping
 ^^^^^^^^^^^^
 
 It is also well known that hybrid PIC routines require the B-field to be
-updated with a smaller timestep than needed for the particles. The update steps
-as outlined above are therefore wrapped in loops that enable the B-field to be
-sub-stepped. The exact number of sub-steps used can be specified by the user
-through a runtime simulation parameter (see :ref:`input parameters section <running-cpp-parameters-hybrid-model>`).
+updated with a smaller timestep than needed for the particles. A 4th order
+Runge-Kutta scheme is used to update the B-field. The RK scheme is repeated a
+number of times during each half-step outlined above. The number of sub-steps
+used can be specified by the user through a runtime simulation parameter
+(see :ref:`input parameters section <running-cpp-parameters-hybrid-model>`).
 
 .. _theory-hybrid-model-elec-temp:
 
@@ -168,4 +168,4 @@ The isothermal limit is given by :math:`\gamma = 1` while :math:`\gamma = 5/3`
 (default) produces the adiabatic limit.
 
 .. bibliography::
-    :keyprefix: c-
+    :keyprefix: kfhm-

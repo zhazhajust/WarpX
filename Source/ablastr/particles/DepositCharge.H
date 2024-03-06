@@ -73,8 +73,9 @@ deposit_charge (typename T_PC::ParIterType& pti,
 {
     // deposition guards
     amrex::IntVect ng_rho = rho->nGrowVect();
-    if (num_rho_deposition_guards.has_value())
+    if (num_rho_deposition_guards.has_value()) {
         ng_rho = num_rho_deposition_guards.value();
+    }
     ABLASTR_ALWAYS_ASSERT_WITH_MESSAGE(ng_rho <= rho->nGrowVect(),
                                        "num_rho_deposition_guards are larger than allocated!");
     // particle shape
@@ -82,14 +83,16 @@ deposit_charge (typename T_PC::ParIterType& pti,
 
     // used for MR when we want to deposit for a subset of the particles on the level in the
     // current box; with offset, we start at a later particle index
-    if (!np_to_deposit.has_value())
+    if (!np_to_deposit.has_value()) {
         np_to_deposit = pti.numParticles();
+    }
     ABLASTR_ALWAYS_ASSERT_WITH_MESSAGE(np_to_deposit.value() + offset <= pti.numParticles(),
                                        "np_to_deposit + offset are out-of-bounds for particle iterator");
 
     int const lev = pti.GetLevel();
-    if (!depos_lev.has_value())
+    if (!depos_lev.has_value()) {
         depos_lev = lev;
+    }
     ABLASTR_ALWAYS_ASSERT_WITH_MESSAGE((depos_lev.value() == (lev-1)) ||
                                        (depos_lev.value() == (lev  )),
                                        "Deposition buffers only work for lev or lev-1");
@@ -100,7 +103,7 @@ deposit_charge (typename T_PC::ParIterType& pti,
     }
 
     // If no particles, do not do anything
-    if (np_to_deposit == 0) return;
+    if (np_to_deposit == 0) { return; }
 
     // Extract deposition order and check that particles shape fits within the guard cells.
     // NOTE: In specific situations where the staggering of rho and the charge deposition algorithm
@@ -192,13 +195,18 @@ deposit_charge (typename T_PC::ParIterType& pti,
                                     rho_fab, np_to_deposit.value(), dx, xyzmin, lo, charge,
                                     n_rz_azimuthal_modes, cost,
                                     load_balance_costs_update_algo);
+    } else if (nox == 4){
+        doChargeDepositionShapeN<4>(GetPosition, wp.dataPtr()+offset, ion_lev,
+                                    rho_fab, np_to_deposit.value(), dx, xyzmin, lo, charge,
+                                    n_rz_azimuthal_modes, cost,
+                                    load_balance_costs_update_algo);
     }
     ABLASTR_PROFILE_VAR_STOP(blp_ppc_chd, do_device_synchronize);
 
 #ifndef AMREX_USE_GPU
     // CPU, tiling: atomicAdd local_rho into rho
     ABLASTR_PROFILE_VAR_START(blp_accumulate, do_device_synchronize);
-    (*rho)[pti].atomicAdd(local_rho, tb, tb, 0, icomp*nc, nc);
+    (*rho)[pti].lockAdd(local_rho, tb, tb, 0, icomp*nc, nc);
     ABLASTR_PROFILE_VAR_STOP(blp_accumulate, do_device_synchronize);
 #endif
 }
