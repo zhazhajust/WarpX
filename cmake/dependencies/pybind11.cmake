@@ -49,7 +49,7 @@ set(WarpX_pybind11_src ""
 
 # Git fetcher
 option(WarpX_pybind11_internal "Download & build pybind11" ON)
-set(WarpX_pybind11_repo "https://github.com/pybind/pybind11.git"
+set(WarpX_pybind11_repo "git@github.com:pybind/pybind11.git"
     CACHE STRING
     "Repository URI to pull and build pybind11 from if(WarpX_pybind11_internal)")
 set(WarpX_pybind11_branch "v2.11.1"

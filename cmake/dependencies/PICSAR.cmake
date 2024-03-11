@@ -103,7 +103,7 @@ if(WarpX_QED)
 
     # Git fetcher
     option(WarpX_picsar_internal   "Download & build PICSAR" ON)
-    set(WarpX_picsar_repo "https://github.com/ECP-WarpX/picsar.git"
+    set(WarpX_picsar_repo "git@github.com:ECP-WarpX/picsar.git"
         CACHE STRING
         "Repository URI to pull and build PICSAR from if(WarpX_picsar_internal)")
     set(WarpX_picsar_branch "aa54e985398c1d575abc7e6737cdbc660a13765f"

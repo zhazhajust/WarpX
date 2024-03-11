@@ -89,7 +89,7 @@ if(WarpX_OPENPMD)
 
     # Git fetcher
     option(WarpX_openpmd_internal   "Download & build openPMD-api" ON)
-    set(WarpX_openpmd_repo "https://github.com/openPMD/openPMD-api.git"
+    set(WarpX_openpmd_repo "git@github.com:openPMD/openPMD-api.git"
         CACHE STRING
         "Repository URI to pull and build openPMD-api from if(WarpX_openpmd_internal)")
     set(WarpX_openpmd_branch "0.15.1"
