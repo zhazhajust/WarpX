@@ -2898,6 +2898,9 @@ class ReducedDiagnostic(picmistandard.base._ClassWithInit, WarpXDiagnosticBase):
     start_step, stop_step: floats, optional
         Timestep that Start/Stop probe the field 
 
+    start_time: floats, optional
+        Time that Start probe the field
+        
     stop_move_step: floats, optional
         If do_moving_window_FP is True, the fieldprobe particles will stop move after stop_move_step
     """
@@ -2962,6 +2965,7 @@ class ReducedDiagnostic(picmistandard.base._ClassWithInit, WarpXDiagnosticBase):
         self.start_step = kw.pop("start_step", None)
         self.stop_step = kw.pop("stop_step", None)
         self.stop_move_step = kw.pop("stop_move_step", None)
+        self.start_time = kw.pop("start_time", None)
         if self.probe_geometry.lower() != 'point':
             self.resolution = kw.pop("resolution")
 

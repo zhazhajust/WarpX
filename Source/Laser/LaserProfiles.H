@@ -384,6 +384,58 @@ private:
 };
 
 /**
+ * Flyfoc laser profile
+ */
+class FlyfocLaserProfile : public ILaserProfile
+{
+
+public:
+    void
+    init (
+        const amrex::ParmParse& ppl,
+        CommonLaserParameters params) final;
+
+    //No update needed
+    void
+    update (amrex::Real /*t */) final {}
+
+    void
+    fill_amplitude (
+        int np,
+        amrex::Real const * AMREX_RESTRICT Xp,
+        amrex::Real const * AMREX_RESTRICT Yp,
+        amrex::Real t,
+        amrex::Real * AMREX_RESTRICT amplitude) const final;
+
+private:
+    struct {
+        amrex::Real waist          = std::numeric_limits<amrex::Real>::quiet_NaN();
+        amrex::Real duration       = std::numeric_limits<amrex::Real>::quiet_NaN();
+        amrex::Real t_peak         = std::numeric_limits<amrex::Real>::quiet_NaN();
+        // focal distance
+        amrex::Real z_left           = std::numeric_limits<amrex::Real>::quiet_NaN();
+        amrex::Real z_right           = std::numeric_limits<amrex::Real>::quiet_NaN();
+        amrex::Real vff           = std::numeric_limits<amrex::Real>::quiet_NaN();
+        int pulse_number           = 200;
+
+        amrex::Real zeta           = 0;
+        amrex::Real beta           = 0;
+        amrex::Real phi2           = 0;
+        amrex::Real phi0           = 0;
+        amrex::Real vg           = 1.0;
+
+        amrex::Vector<amrex::Real> stc_direction; //! Direction of the spatio-temporal couplings
+        amrex::Real theta_stc; //! Angle between polarization (p_X) and direction of spatiotemporal coupling (stc_direction)
+
+        amrex::Vector<amrex::Real> h_focal_spot; //! Focus position
+        amrex::Vector<amrex::Real> h_focal_delay; //! Time delay
+
+    } m_params;
+
+    CommonLaserParameters m_common_params;
+};
+
+/**
  * Maps laser profile names to lambdas returing unique pointers
  * to the corresponding laser profile objects.
  */
@@ -399,7 +451,9 @@ laser_profiles_dictionary =
     {"parse_field_function",
         [] () {return std::make_unique<FieldFunctionLaserProfile>();} },
     {"from_file",
-        [] () {return std::make_unique<FromFileLaserProfile>();} }
+        [] () {return std::make_unique<FromFileLaserProfile>();} },
+    {"flyfoc",
+        [] () {return std::make_unique<FlyfocLaserProfile>();} }
 };
 
 } //WarpXLaserProfiles

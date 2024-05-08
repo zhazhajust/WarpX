@@ -122,8 +122,7 @@ private:
 
     // //! timestep where start sample
     int start_step = 0;
-    amrex::Real start_time = 0.0;
-    
+
     // //! timestep where stop sample
     int stop_step = INT_MAX;
 

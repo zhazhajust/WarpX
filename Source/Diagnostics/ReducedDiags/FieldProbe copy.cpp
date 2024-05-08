@@ -84,7 +84,7 @@ FieldProbe::FieldProbe (std::string rd_name)
         utils::parser::getWithParser(
             pp_rd_name, "x_probe", x_probe);
 #endif
-#if defined(WARPX_DIM_3D) || defined(WARPX_DIM_RZ)
+#if defined(WARPX_DIM_3D)
         utils::parser::getWithParser(
             pp_rd_name, "y_probe", y_probe);
 #endif
@@ -98,7 +98,7 @@ FieldProbe::FieldProbe (std::string rd_name)
         utils::parser::queryWithParser(pp_rd_name, "x_probe", x_probe);
         utils::parser::queryWithParser(pp_rd_name, "x1_probe", x1_probe);
 #endif
-#if defined(WARPX_DIM_3D) || defined(WARPX_DIM_RZ)
+#if defined(WARPX_DIM_3D)
         utils::parser::queryWithParser(pp_rd_name, "y_probe", y_probe);
         utils::parser::queryWithParser(pp_rd_name, "y1_probe", y1_probe);
 #endif
@@ -113,7 +113,7 @@ FieldProbe::FieldProbe (std::string rd_name)
             "Plane probe should be used in a 2D or 3D simulation only");
 #endif
         m_probe_geometry = DetectorGeometry::Plane;
-#if defined(WARPX_DIM_3D) || defined(WARPX_DIM_RZ)
+#if defined(WARPX_DIM_3D)
         utils::parser::queryWithParser(pp_rd_name, "y_probe", y_probe);
         utils::parser::queryWithParser(pp_rd_name, "target_normal_x", target_normal_x);
         utils::parser::queryWithParser(pp_rd_name, "target_normal_y", target_normal_y);
@@ -143,14 +143,6 @@ FieldProbe::FieldProbe (std::string rd_name)
     utils::parser::queryWithParser(pp_rd_name, "stop_move_step", stop_move_step);
     // utils::parser::queryWithParser(pp_rd_name, "max_level", max_level);
     // if(nLevel > max_level + 1) nLevel = max_level + 1;
-
-    utils::parser::queryWithParser(pp_rd_name, "start_time", start_time);
-    if (start_time > 0.0)
-    {
-        int finest_level = WarpX::GetInstance().finestLevel();
-        start_step = static_cast<int>(start_time / WarpX::GetInstance().getdt(finest_level));
-        stop_move_step = start_step;
-    }
 
     bool raw_fields;
     const bool raw_fields_specified = pp_rd_name.query("raw_fields", raw_fields);
@@ -354,17 +346,9 @@ void FieldProbe::InitData ()
                     temp_pos[0] = lowercorner[0] + SideStepSize[0] * sidestep + UpStepSize[0] * upstep;
                     temp_pos[1] = lowercorner[1] + SideStepSize[1] * sidestep + UpStepSize[1] * upstep;
                     temp_pos[2] = lowercorner[2] + SideStepSize[2] * sidestep + UpStepSize[2] * upstep;
-#if defined(WARPX_DIM_RZ)
-                    auto r = std::sqrt(temp_pos[0] * temp_pos[0] + temp_pos[1] * temp_pos[1]);
-                    // if(r > detector_radius) continue;
-                    xpos.push_back(r);
-                    ypos.push_back(std::atan2(temp_pos[1], temp_pos[0]));
-                    zpos.push_back(temp_pos[2]);
-#else
                     xpos.push_back(temp_pos[0]);
                     ypos.push_back(temp_pos[1]);
                     zpos.push_back(temp_pos[2]);
-#endif
                 }
             }
         }
@@ -463,15 +447,15 @@ void FieldProbe::ComputeDiags (int step)
                 const auto temp_warpx_moving_window = WarpX::moving_window_dir;
                 if (temp_warpx_moving_window == 0)
                 {
-                    x_probe += move_dist;
+                    x_probe += probe_move;
                 }
                 if (temp_warpx_moving_window == 1)
                 {
-                    y_probe += move_dist;
+                    y_probe += probe_move;
                 }
                 if (temp_warpx_moving_window == WARPX_ZINDEX)
                 {
-                    z_probe += move_dist;
+                    z_probe += probe_move;
                 }
             }
         }

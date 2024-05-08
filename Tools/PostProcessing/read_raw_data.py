@@ -257,7 +257,7 @@ def read_reduced_diags(filename, delimiter=' '):
     field_units =  [s[s.find("(")+1:s.find(")")] for s in unformatted_header]
     field_column =  [s[s.find("[")+1:s.find("]")] for s in unformatted_header]
     # Load data and re-format to a dictionary
-    data = np.loadtxt( filename, delimiter=delimiter )
+    data = np.loadtxt( filename, delimiter=delimiter, skiprows=1 )
     if data.ndim == 1:
         data_dict = {key: np.atleast_1d(data[i]) for i, key in enumerate(field_names)}
     else:
@@ -284,7 +284,7 @@ def read_reduced_diags_histogram(filename, delimiter=' '):
     field_column    = [s[s.find("[")+1:s.find("]")] for s in unformatted_header]
     field_bin       = [s[s.find("=")+1:s.find("(")] for s in unformatted_header]
     # Load data and re-format to a dictionary
-    data = np.loadtxt( filename, delimiter=delimiter )
+    data = np.loadtxt( filename, delimiter=delimiter, skiprows=1 )
     if data.ndim == 1:
         data_dict = {key: data[i] for i, key in enumerate(field_names)}
     else:
