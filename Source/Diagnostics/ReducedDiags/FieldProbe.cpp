@@ -145,12 +145,6 @@ FieldProbe::FieldProbe (std::string rd_name)
     // if(nLevel > max_level + 1) nLevel = max_level + 1;
 
     utils::parser::queryWithParser(pp_rd_name, "start_time", start_time);
-    if (start_time > 0.0)
-    {
-        int finest_level = WarpX::GetInstance().finestLevel();
-        start_step = static_cast<int>(start_time / WarpX::GetInstance().getdt(finest_level));
-        stop_move_step = start_step;
-    }
 
     bool raw_fields;
     const bool raw_fields_specified = pp_rd_name.query("raw_fields", raw_fields);
@@ -378,6 +372,13 @@ void FieldProbe::InitData ()
     //prob_lo_prev = WarpX::GetInstance().Geom(0).ProbLo()[WarpX::moving_window_dir];
     auto & warpx = WarpX::GetInstance();
     prob_lo_prev = warpx.getmoving_window_x();
+
+    if (start_time > 0.0)
+    {
+        int finest_level = WarpX::GetInstance().finestLevel();
+        start_step = static_cast<int>(start_time / WarpX::GetInstance().getdt(finest_level));
+        stop_move_step = start_step;
+    }
 }
 
 void FieldProbe::LoadBalance ()
@@ -477,18 +478,6 @@ void FieldProbe::ComputeDiags (int step)
         }
         const amrex::MultiFab& (WarpX::*getEfieldFunc) (int lev, int direction);
         const amrex::MultiFab& (WarpX::*getBfieldFunc) (int lev, int direction);
-
-        // if(lev == 0){
-        //     // getEfieldFunc = &WarpX::getEfield_fp;
-        //     // getBfieldFunc = &WarpX::getBfield_fp;
-        //     getEfieldFunc = &WarpX::getEfield;
-        //     getBfieldFunc = &WarpX::getBfield;
-        // }else{
-        //     // getEfieldFunc = &WarpX::getEfield_cp;
-        //     // getBfieldFunc = &WarpX::getBfield_cp;
-        //     getEfieldFunc = &WarpX::getEfield;
-        //     getBfieldFunc = &WarpX::getBfield;
-        // }
 
         getEfieldFunc = &WarpX::getEfield;
         getBfieldFunc = &WarpX::getBfield;
@@ -760,7 +749,7 @@ void FieldProbe::WriteToFile (int step) const
                 if (m_data_out_level[lev][i*noutputs] < first_id) {
                     first_id = static_cast<long int>(m_data_out_level[lev][i*noutputs]);
                 }
-    }
+            }
             np += static_cast<long> (m_valid_particles_level[lev]);
             data_size += m_data_out_level[lev].size();
         }
