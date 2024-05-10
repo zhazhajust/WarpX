@@ -18,6 +18,9 @@ import periodictable
 import picmistandard
 import pywarpx
 
+import math
+from picmistandard.base import _ClassWithInit, _get_constants
+
 codename = 'warpx'
 picmistandard.register_codename(codename)
 
@@ -1292,6 +1295,157 @@ class GaussianLaser(picmistandard.PICMI_GaussianLaser):
 
         self.laser.do_continuous_injection = self.fill_in
 
+class FlyfocLaser(_ClassWithInit):
+    """
+    Specifies a Gaussian laser distribution.
+
+    More precisely, the electric field **near the focal plane** is given by:
+
+    .. math::
+
+        E(\\boldsymbol{x},t) = a_0\\times E_0\,
+        \exp\left( -\\frac{r^2}{w_0^2} - \\frac{(z-z_0-ct)^2}{c^2\\tau^2} \\right)
+        \cos[ k_0( z - z_0 - ct ) - \phi_{cep} ]
+
+    where :math:`k_0 = 2\pi/\\lambda_0` is the wavevector and where
+    :math:`E_0 = m_e c^2 k_0 / q_e` is the field amplitude for :math:`a_0=1`.
+
+    .. note::
+
+        The additional terms that arise **far from the focal plane**
+        (Gouy phase, wavefront curvature, ...) are not included in the above
+        formula for simplicity, but are of course taken into account by
+        the code, when initializing the laser pulse away from the focal plane.
+
+    Parameters
+    ----------
+    wavelength: float
+        Laser wavelength [m], defined as :math:`\\lambda_0` in the above formula
+
+    waist: float
+        Waist of the Gaussian pulse at focus [m], defined as :math:`w_0` in the above formula
+
+    duration: float
+        Duration of the Gaussian pulse [s], defined as :math:`\\tau` in the above formula
+
+    propagation_direction: unit vector of length 3 of floats
+        Direction of propagation [1]
+
+    polarization_direction: unit vector of length 3 of floats
+        Direction of polarization [1]
+
+    z_left: float
+        Position of the left edge of the grid [m]
+
+    z_right: float
+        Position of the right edge of the grid [m]
+
+    vff: float
+        Forward light speed [m/s]
+
+    pulse_number: int
+        Number of pulses
+
+    centroid_position: vector of length 3 of floats
+        Position of the laser centroid at time 0 [m]
+
+    a0: float
+        Normalized vector potential at focus
+        Specify either a0 or E0 (E0 takes precedence).
+
+    E0: float
+        Maximum amplitude of the laser field [V/m]
+        Specify either a0 or E0 (E0 takes precedence).
+
+    phi0: float
+        Carrier envelope phase (CEP) [rad]
+
+    zeta: float
+        Spatial chirp at focus (in the lab frame) [m.s]
+
+    beta: float
+        Angular dispersion at focus (in the lab frame) [rad.s]
+
+    phi2: float
+        Temporal chirp at focus (in the lab frame) [s^2]
+
+    fill_in: bool, default=True
+        Flags whether to fill in the empty spaced opened up when the grid moves
+
+    name: string, optional
+        Optional name of the laser
+    """
+    def __init__(self, wavelength, waist, duration,
+                 propagation_direction,
+                 polarization_direction,
+                 z_left, z_right, vff, 
+                 centroid_position,
+                 pulse_number = None,
+                 a0 = None,
+                 E0 = None,
+                 phi0 = None,
+                 zeta = None,
+                 beta = None,
+                 phi2 = None,
+                 name = None,
+                 fill_in = True,
+                 **kw):
+
+        assert E0 is not None or a0 is not None, 'One of E0 or a0 must be speficied'
+
+        k0 = 2.*math.pi/wavelength
+        if E0 is None:
+            E0 = a0*_get_constants().m_e*_get_constants().c**2*k0/_get_constants().q_e
+        if a0 is None:
+            a0 = E0/(_get_constants().m_e*_get_constants().c**2*k0/_get_constants().q_e)
+
+        self.wavelength = wavelength
+        self.k0 = k0
+        self.waist = waist
+        self.duration = duration
+        self.z_left = z_left
+        self.z_right = z_right
+        self.vff = vff
+        self.pulse_number = pulse_number
+        self.centroid_position = centroid_position
+        self.propagation_direction = propagation_direction
+        self.polarization_direction = polarization_direction
+        self.a0 = a0
+        self.E0 = E0
+        self.phi0 = phi0
+        self.zeta = zeta
+        self.beta = beta
+        self.phi2 = phi2
+        self.name = name
+        self.fill_in = fill_in
+
+        self.handle_init(kw)
+
+    def laser_initialize_inputs(self):
+        self.laser_number = len(pywarpx.lasers.names) + 1
+        if self.name is None:
+            self.name = 'laser{}'.format(self.laser_number)
+
+        self.laser = pywarpx.Lasers.newlaser(self.name)
+
+        self.laser.profile = "flyfoc"
+        self.laser.wavelength = self.wavelength  # The wavelength of the laser (in meters)
+        self.laser.e_max = self.E0  # Maximum amplitude of the laser field (in V/m)
+        self.laser.polarization = self.polarization_direction  # The main polarization vector
+        self.laser.profile_waist = self.waist  # The waist of the laser (in meters)
+        self.laser.profile_duration = self.duration  # The duration of the laser (in seconds)
+        self.laser.direction = self.propagation_direction
+        self.laser.z_left = self.z_left
+        self.laser.z_right = self.z_right
+        self.laser.vff = self.vff
+        self.laser.pulse_number = self.pulse_number
+        self.laser.zeta = self.zeta
+        self.laser.beta = self.beta
+        self.laser.phi2 = self.phi2
+        self.laser.phi0 = self.phi0
+
+        self.laser.do_continuous_injection = self.fill_in
+
 class AnalyticLaser(picmistandard.PICMI_AnalyticLaser):
     def init(self, kw):
         self.mangle_dict = None
@@ -1344,6 +1498,13 @@ class LaserAntenna(picmistandard.PICMI_LaserAntenna):
                 (self.position[2] - laser.centroid_position[2])**2
             ) / constants.c
 
+        if isinstance(laser, FlyfocLaser):
+            # The time at which the laser reaches its peak (in seconds)
+            laser.laser.profile_t_peak = np.sqrt(
+                (self.position[0] - laser.centroid_position[0])**2 +
+                (self.position[1] - laser.centroid_position[1])**2 +
+                (self.position[2] - laser.centroid_position[2])**2
+            ) / constants.c 
 
 class LoadInitialField(picmistandard.PICMI_LoadGriddedField):
     def applied_field_initialize_inputs(self):

@@ -130,6 +130,10 @@ WarpXLaserProfiles::FlyfocLaserProfile::fill_amplitude (
     const Real k0 = 2._rt*MathConst::pi/m_common_params.wavelength;
     const Real inv_tau2 = 1._rt /(m_params.duration * m_params.duration);
     const Real oscillation_phase = k0 * PhysConst::c * ( t - m_params.t_peak ) + m_params.phi0;
+    
+    // Amplitude and monochromatic oscillations
+    const Complex t_prefactor =
+        m_common_params.e_max * amrex::exp( I * oscillation_phase );
 
     // Copy member variables to tmp copies for GPU runs.
     auto const tmp_profile_t_peak = m_params.t_peak;
@@ -138,9 +142,9 @@ WarpXLaserProfiles::FlyfocLaserProfile::fill_amplitude (
     auto const tmp_theta_stc = m_params.theta_stc;
 
     for(int j = 0; j < m_params.pulse_number; j++){
-        amrex::Real focal_spot = m_params.h_focal_spot[j];
-        amrex::Real focal_delay = m_params.h_focal_delay[j];
-        auto const tmp_profile_focal_distance = focal_spot;
+        // amrex::Real focal_spot = m_params.h_focal_spot[j];
+        auto const focal_delay = m_params.h_focal_delay[j];
+        auto const tmp_profile_focal_distance = m_params.h_focal_spot[j];
 
         // The coefficients below contain info about Gouy phase,
         // laser diffraction, and phase front curvature
@@ -156,10 +160,6 @@ WarpXLaserProfiles::FlyfocLaserProfile::fill_amplitude (
             (m_params.zeta+m_params.beta*tmp_profile_focal_distance*inv_tau2)
             * (m_params.zeta+m_params.beta*tmp_profile_focal_distance*inv_complex_waist_2)
             + 2._rt*I*(m_params.phi2-m_params.beta*m_params.beta*k0*tmp_profile_focal_distance)*inv_tau2;
-
-        // Amplitude and monochromatic oscillations
-        const Complex t_prefactor =
-            m_common_params.e_max * amrex::exp( I * oscillation_phase );
 
         // Because diffract_factor is a complex, the code below takes into
         // account the impact of the dimensionality on both the Gouy phase

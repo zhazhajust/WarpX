@@ -209,6 +209,7 @@ LaserParticleContainer::LaserParticleContainer (AmrCore* amr_core, int ispecies,
     m_u_Y = m_p_Y;
 #elif defined(WARPX_DIM_XZ)
     m_u_X = CrossProduct({0., 1., 0.}, m_nvec);
+    // m_u_X = CrossProduct(m_nvec, {0., 1., 0.});
     m_u_Y = {0., 1., 0.};
 #elif defined(WARPX_DIM_1D_Z)
     m_u_X = {1., 0., 0.};
