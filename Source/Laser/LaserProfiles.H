@@ -429,7 +429,8 @@ private:
 
         amrex::Vector<amrex::Real> h_focal_spot; //! Focus position
         amrex::Vector<amrex::Real> h_focal_delay; //! Time delay
-
+        amrex::Vector<amrex::Real> h_focal_weight; //! Time delay
+        amrex::Vector<amrex::Real> h_focal_phase; //! Time delay
     } m_params;
 
     CommonLaserParameters m_common_params;

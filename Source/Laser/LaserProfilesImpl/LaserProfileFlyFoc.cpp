@@ -106,6 +106,45 @@ WarpXLaserProfiles::FlyfocLaserProfile::init (
             m_params.h_focal_delay[i] = (m_params.h_focal_spot[i] - m_params.z_left) * (1/m_params.vff - 1) / PhysConst::c;
         }
     }
+
+    {
+        amrex::Real max_res = 0.0;
+
+        // Init at host
+        amrex::Gpu::HostVector<amrex::Real> h_plane_Xp(1, 0.0);
+        amrex::Gpu::HostVector<amrex::Real> h_plane_Yp(1, 0.0);
+        amrex::Gpu::HostVector<amrex::Real> h_amplitude_E(1, 0.0);
+
+        // Init at device
+        amrex::Gpu::DeviceVector<amrex::Real> d_plane_Xp(1, 0.0);
+        amrex::Gpu::DeviceVector<amrex::Real> d_plane_Yp(1, 0.0);
+        amrex::Gpu::DeviceVector<amrex::Real> d_amplitude_E(1, 0.0);
+
+        amrex::Real dt = 0.1 * m_common_params.wavelength / PhysConst::c;
+
+        amrex::Real start_delay = min(m_params.h_focal_delay[0], m_params.h_focal_delay[m_params.pulse_number - 1]);
+        amrex::Real end_delay = max(m_params.h_focal_delay[0], m_params.h_focal_delay[m_params.pulse_number - 1]);
+
+        for(amrex::Real delay = start_delay; delay < end_delay; delay += dt){
+            // Copy from host to device
+            amrex::Gpu::copy(amrex::Gpu::hostToDevice, h_plane_Xp.begin(), h_plane_Xp.end(), d_plane_Xp.begin());
+            amrex::Gpu::copy(amrex::Gpu::hostToDevice, h_plane_Yp.begin(), h_plane_Yp.end(), d_plane_Yp.begin());
+            amrex::Gpu::copy(amrex::Gpu::hostToDevice, h_amplitude_E.begin(), h_amplitude_E.end(), d_amplitude_E.begin());
+
+            // run cuda kernel
+            fill_amplitude(static_cast<int>(1), d_plane_Xp.dataPtr(), d_plane_Yp.dataPtr(), delay, d_amplitude_E.dataPtr());
+
+            // Copy from device to host
+            amrex::Gpu::copy(amrex::Gpu::deviceToHost, d_amplitude_E.begin(), d_amplitude_E.end(), h_amplitude_E.begin());
+
+            // calcu max amplitude
+            max_res = std::max(max_res, std::abs(h_amplitude_E[0]));
+        }
+
+        if(m_common_params.e_max != max_res){
+            m_common_params.e_max = m_common_params.e_max / max_res * m_common_params.e_max;
+        }
+    }
 }
 
 /* \brief compute field amplitude for a Gaussian laser, at particles' position
@@ -140,6 +179,8 @@ WarpXLaserProfiles::FlyfocLaserProfile::fill_amplitude (
     auto const tmp_beta = m_params.beta;
     auto const tmp_zeta = m_params.zeta;
     auto const tmp_theta_stc = m_params.theta_stc;
+
+    // amrex::Vector<amrex::Real> iter_list;
 
     for(int j = 0; j < m_params.pulse_number; j++){
         // amrex::Real focal_spot = m_params.h_focal_spot[j];
