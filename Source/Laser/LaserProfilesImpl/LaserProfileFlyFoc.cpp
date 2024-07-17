@@ -19,11 +19,13 @@
 #include <AMReX_GpuLaunch.H>
 #include <AMReX_GpuQualifiers.H>
 #include <AMReX_ParmParse.H>
+#include <AMReX_Parser_Exe.H>
 #include <AMReX_REAL.H>
 #include <AMReX_Vector.H>
 
 #include <cmath>
 #include <cstdlib>
+#include <functional>
 #include <numeric>
 #include <vector>
 
@@ -38,9 +40,6 @@ WarpXLaserProfiles::FlyfocLaserProfile::init (
     m_common_params = params;
 
     // Parse the properties of the Gaussian profile
-    utils::parser::getWithParser(ppl, "vff", m_params.vff);
-    utils::parser::getWithParser(ppl, "z_left", m_params.z_left);
-    utils::parser::getWithParser(ppl, "z_right", m_params.z_right);
     utils::parser::queryWithParser(ppl, "pulse_number", m_params.pulse_number);
     utils::parser::getWithParser(ppl, "profile_waist", m_params.waist);
     utils::parser::getWithParser(ppl, "profile_duration", m_params.duration);
@@ -49,7 +48,57 @@ WarpXLaserProfiles::FlyfocLaserProfile::init (
     utils::parser::queryWithParser(ppl, "beta", m_params.beta);
     utils::parser::queryWithParser(ppl, "phi2", m_params.phi2);
     utils::parser::queryWithParser(ppl, "phi0", m_params.phi0);
-    utils::parser::queryWithParser(ppl, "vg", m_params.vg);
+
+    // parse "math_func" with different "focal_type"
+    std::string focal_type;
+    // utils::parser::queryWithParser(ppl, "focal_type", focal_type);
+    if(ppl.query("focal_type", focal_type)){
+        m_params.focal_type = m_params.focal_type;
+    }
+    if (focal_type == "math") {
+        std::function<amrex::Vector<amrex::Real>(std::string)> parse_math_func = 
+                [&](std::string func_head){
+            std::string math_func;
+            amrex::Parser m_math_parser;
+            utils::parser::Store_parserString(
+                    ppl, func_head, math_func);
+            m_math_parser = utils::parser::makeParser(math_func, {"i"});
+            amrex::Vector<amrex::Real> h_focal_spot(m_params.pulse_number);
+            amrex::ParserExecutor<1> parser = m_math_parser.compile<1>();
+            for(int i = 0; i < m_params.pulse_number; i++){
+                h_focal_spot[i] = parser({static_cast<double>(i)});
+            }
+            return h_focal_spot;
+        };
+
+        m_params.h_focal_spot = parse_math_func("focal_spot(i)");
+        m_params.h_focal_delay = parse_math_func("focal_delay(i)");
+        m_params.h_focal_weight = parse_math_func("focal_weight(i)");
+        m_params.h_focal_phase = parse_math_func("focal_phase(i)");
+        
+    }else if(focal_type == "linear"){
+        std::function<void(void)> linear_focal = [&]() {
+            // Calculate focus position and time delay
+            m_params.h_focal_spot = amrex::Vector<amrex::Real> (m_params.pulse_number);
+            m_params.h_focal_delay = amrex::Vector<amrex::Real> (m_params.pulse_number);
+            if(m_params.vff > 1.0){
+                for(int i = 0; i < m_params.pulse_number; i++){
+                    m_params.h_focal_spot[i] = m_params.z_left + i * (m_params.z_right - m_params.z_left) / (m_params.pulse_number - 1);
+                    m_params.h_focal_delay[i] = (m_params.z_right - m_params.h_focal_spot[i]) * (1 - m_params.vg/m_params.vff) / PhysConst::c;
+                }
+            }else{
+                for(int i = 0; i < m_params.pulse_number; i++){
+                    m_params.h_focal_spot[i] = m_params.z_right - i * (m_params.z_right - m_params.z_left) / (m_params.pulse_number - 1);
+                    m_params.h_focal_delay[i] = (m_params.h_focal_spot[i] - m_params.z_left) * (m_params.vg/m_params.vff - 1) / PhysConst::c;
+                }
+            }
+        };
+        utils::parser::queryWithParser(ppl, "vg", m_params.vg);
+        utils::parser::getWithParser(ppl, "vff", m_params.vff);
+        utils::parser::getWithParser(ppl, "z_left", m_params.z_left);
+        utils::parser::getWithParser(ppl, "z_right", m_params.z_right);
+        linear_focal();
+    }
 
     m_params.stc_direction = m_common_params.p_X;
     utils::parser::queryArrWithParser(ppl, "stc_direction", m_params.stc_direction);
@@ -86,65 +135,32 @@ WarpXLaserProfiles::FlyfocLaserProfile::init (
     m_params.theta_stc = 0.;
 #endif
 
-    // Calculate focus position and time delay
-    
-    m_params.h_focal_spot = amrex::Vector<amrex::Real> (m_params.pulse_number);
-    m_params.h_focal_delay = amrex::Vector<amrex::Real> (m_params.pulse_number);
-
-    // m_params.h_focal_spot.resize(m_params.pulse_number);
-    // m_params.h_focal_delay.resize(m_params.pulse_number);
-
-    // amrex::Real base = m_params.z_left if (m_params.vff > 1.0) else m_params.z_right;
-    if(m_params.vff > 1.0){
-        for(int i = 0; i < m_params.pulse_number; i++){
-            m_params.h_focal_spot[i] = m_params.z_left + i * (m_params.z_right - m_params.z_left) / (m_params.pulse_number - 1);
-            m_params.h_focal_delay[i] = (m_params.z_right - m_params.h_focal_spot[i]) * (1 - 1/m_params.vff) / PhysConst::c;
-        }
-    }else{
-        for(int i = 0; i < m_params.pulse_number; i++){
-            m_params.h_focal_spot[i] = m_params.z_right - i * (m_params.z_right - m_params.z_left) / (m_params.pulse_number - 1);
-            m_params.h_focal_delay[i] = (m_params.h_focal_spot[i] - m_params.z_left) * (1/m_params.vff - 1) / PhysConst::c;
-        }
-    }
-
-    {
+    std::function<void(void)> normalize_env = [&]() {
         amrex::Real max_res = 0.0;
-
-        // Init at host
-        amrex::Gpu::HostVector<amrex::Real> h_plane_Xp(1, 0.0);
-        amrex::Gpu::HostVector<amrex::Real> h_plane_Yp(1, 0.0);
-        amrex::Gpu::HostVector<amrex::Real> h_amplitude_E(1, 0.0);
-
         // Init at device
         amrex::Gpu::DeviceVector<amrex::Real> d_plane_Xp(1, 0.0);
         amrex::Gpu::DeviceVector<amrex::Real> d_plane_Yp(1, 0.0);
         amrex::Gpu::DeviceVector<amrex::Real> d_amplitude_E(1, 0.0);
-
+        amrex::Gpu::HostVector<amrex::Real> h_amplitude_E(1, 0.0);
         amrex::Real dt = 0.1 * m_common_params.wavelength / PhysConst::c;
-
         amrex::Real start_delay = min(m_params.h_focal_delay[0], m_params.h_focal_delay[m_params.pulse_number - 1]);
         amrex::Real end_delay = max(m_params.h_focal_delay[0], m_params.h_focal_delay[m_params.pulse_number - 1]);
-
         for(amrex::Real delay = start_delay; delay < end_delay; delay += dt){
-            // Copy from host to device
-            amrex::Gpu::copy(amrex::Gpu::hostToDevice, h_plane_Xp.begin(), h_plane_Xp.end(), d_plane_Xp.begin());
-            amrex::Gpu::copy(amrex::Gpu::hostToDevice, h_plane_Yp.begin(), h_plane_Yp.end(), d_plane_Yp.begin());
-            amrex::Gpu::copy(amrex::Gpu::hostToDevice, h_amplitude_E.begin(), h_amplitude_E.end(), d_amplitude_E.begin());
-
             // run cuda kernel
-            fill_amplitude(static_cast<int>(1), d_plane_Xp.dataPtr(), d_plane_Yp.dataPtr(), delay, d_amplitude_E.dataPtr());
-
+            fill_amplitude(static_cast<int>(1), d_plane_Xp.dataPtr(), d_plane_Yp.dataPtr(),
+                delay, d_amplitude_E.dataPtr());
             // Copy from device to host
-            amrex::Gpu::copy(amrex::Gpu::deviceToHost, d_amplitude_E.begin(), d_amplitude_E.end(), h_amplitude_E.begin());
-
+            amrex::Gpu::copy(amrex::Gpu::deviceToHost, d_amplitude_E.begin(), d_amplitude_E.end(), 
+                h_amplitude_E.begin());
             // calcu max amplitude
             max_res = std::max(max_res, std::abs(h_amplitude_E[0]));
         }
-
         if(m_common_params.e_max != max_res){
             m_common_params.e_max = m_common_params.e_max / max_res * m_common_params.e_max;
         }
-    }
+    };
+
+    normalize_env();
 }
 
 /* \brief compute field amplitude for a Gaussian laser, at particles' position

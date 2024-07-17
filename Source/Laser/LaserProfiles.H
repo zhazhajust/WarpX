@@ -413,16 +413,19 @@ private:
         amrex::Real duration       = std::numeric_limits<amrex::Real>::quiet_NaN();
         amrex::Real t_peak         = std::numeric_limits<amrex::Real>::quiet_NaN();
         // focal distance
-        amrex::Real z_left           = std::numeric_limits<amrex::Real>::quiet_NaN();
-        amrex::Real z_right           = std::numeric_limits<amrex::Real>::quiet_NaN();
-        amrex::Real vff           = std::numeric_limits<amrex::Real>::quiet_NaN();
+        amrex::Real z_left         = std::numeric_limits<amrex::Real>::quiet_NaN();
+        amrex::Real z_right        = std::numeric_limits<amrex::Real>::quiet_NaN();
+        amrex::Real vff            = std::numeric_limits<amrex::Real>::quiet_NaN();
+        
         int pulse_number           = 200;
 
         amrex::Real zeta           = 0;
         amrex::Real beta           = 0;
         amrex::Real phi2           = 0;
         amrex::Real phi0           = 0;
-        amrex::Real vg           = 1.0;
+        amrex::Real vg             = 1.0;
+
+        std::string focal_type     = "linear";
 
         amrex::Vector<amrex::Real> stc_direction; //! Direction of the spatio-temporal couplings
         amrex::Real theta_stc; //! Angle between polarization (p_X) and direction of spatiotemporal coupling (stc_direction)
