@@ -1378,9 +1378,13 @@ class FlyfocLaser(_ClassWithInit):
     def __init__(self, wavelength, waist, duration,
                  propagation_direction,
                  polarization_direction,
-                 z_left, z_right, vff, 
+                #  focal_type,
+                #  focal_spot, focal_delay,
+                #  focal_weight, focal_phase,
+                 z_left, z_right, vff,
                  centroid_position,
                  pulse_number = None,
+                 if_norm_env = True,
                  a0 = None,
                  E0 = None,
                  phi0 = None,
@@ -1418,7 +1422,7 @@ class FlyfocLaser(_ClassWithInit):
         self.phi2 = phi2
         self.name = name
         self.fill_in = fill_in
-
+        self.if_norm_env = if_norm_env
         self.handle_init(kw)
 
     def laser_initialize_inputs(self):
@@ -1443,6 +1447,7 @@ class FlyfocLaser(_ClassWithInit):
         self.laser.beta = self.beta
         self.laser.phi2 = self.phi2
         self.laser.phi0 = self.phi0
+        self.laser.if_norm_env = self.if_norm_env
 
         self.laser.do_continuous_injection = self.fill_in
 

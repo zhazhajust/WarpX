@@ -135,6 +135,7 @@ WarpXLaserProfiles::FlyfocLaserProfile::init (
     m_params.theta_stc = 0.;
 #endif
 
+    // Normalize the electric field to the maximum value
     std::function<void(void)> normalize_env = [&]() {
         amrex::Real max_res = 0.0;
         // Init at device
@@ -160,7 +161,10 @@ WarpXLaserProfiles::FlyfocLaserProfile::init (
         }
     };
 
-    normalize_env();
+    bool if_norm_env;
+    if(ppl.query("if_norm_env", if_norm_env)){
+        normalize_env();
+    }
 }
 
 /* \brief compute field amplitude for a Gaussian laser, at particles' position
