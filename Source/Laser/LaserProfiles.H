@@ -425,7 +425,7 @@ private:
         amrex::Real phi0           = 0;
         amrex::Real vg             = 1.0;
 
-        std::string focal_type     = "linear";
+        // std::string focal_type     = "linear";
 
         amrex::Vector<amrex::Real> stc_direction; //! Direction of the spatio-temporal couplings
         amrex::Real theta_stc; //! Angle between polarization (p_X) and direction of spatiotemporal coupling (stc_direction)

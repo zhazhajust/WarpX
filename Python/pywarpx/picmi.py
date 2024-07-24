@@ -1378,11 +1378,11 @@ class FlyfocLaser(_ClassWithInit):
     def __init__(self, wavelength, waist, duration,
                  propagation_direction,
                  polarization_direction,
-                #  focal_type,
-                #  focal_spot, focal_delay,
-                #  focal_weight, focal_phase,
-                 z_left, z_right, vff,
                  centroid_position,
+                 focal_type = None,
+                 focal_spot = None, focal_delay = None,
+                 focal_weight = None, focal_phase = None,
+                 z_left = None, z_right = None, vff = None,
                  pulse_number = None,
                  if_norm_env = True,
                  a0 = None,
@@ -1407,10 +1407,6 @@ class FlyfocLaser(_ClassWithInit):
         self.k0 = k0
         self.waist = waist
         self.duration = duration
-        self.z_left = z_left
-        self.z_right = z_right
-        self.vff = vff
-        self.pulse_number = pulse_number
         self.centroid_position = centroid_position
         self.propagation_direction = propagation_direction
         self.polarization_direction = polarization_direction
@@ -1423,6 +1419,17 @@ class FlyfocLaser(_ClassWithInit):
         self.name = name
         self.fill_in = fill_in
         self.if_norm_env = if_norm_env
+
+        self.pulse_number = pulse_number        
+        self.focal_type = focal_type
+        self.focal_spot = focal_spot
+        self.focal_delay = focal_delay
+        self.focal_weight = focal_weight
+        self.focal_phase = focal_phase
+        self.z_left = z_left
+        self.z_right = z_right
+        self.vff = vff
+        
         self.handle_init(kw)
 
     def laser_initialize_inputs(self):
@@ -1439,15 +1446,27 @@ class FlyfocLaser(_ClassWithInit):
         self.laser.profile_waist = self.waist  # The waist of the laser (in meters)
         self.laser.profile_duration = self.duration  # The duration of the laser (in seconds)
         self.laser.direction = self.propagation_direction
-        self.laser.z_left = self.z_left
-        self.laser.z_right = self.z_right
-        self.laser.vff = self.vff
-        self.laser.pulse_number = self.pulse_number
+
         self.laser.zeta = self.zeta
         self.laser.beta = self.beta
         self.laser.phi2 = self.phi2
         self.laser.phi0 = self.phi0
+
+        ### fly focus params
+        self.laser.pulse_number = self.pulse_number
+        self.laser.focal_type = self.focal_type
         self.laser.if_norm_env = self.if_norm_env
+
+        ### math function
+        self.laser.focal_spot = self.focal_spot
+        self.laser.focal_delay = self.focal_delay
+        self.laser.focal_weight = self.focal_weight
+        self.laser.focal_phase = self.focal_phase
+
+        ### linear function
+        self.laser.z_left = self.z_left
+        self.laser.z_right = self.z_right
+        self.laser.vff = self.vff
 
         self.laser.do_continuous_injection = self.fill_in
 
