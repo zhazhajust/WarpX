@@ -15,6 +15,8 @@
 #include "Initialization/InjectorMomentum.H"
 #include "Initialization/InjectorPosition.H"
 #include "MultiParticleContainer.H"
+#include <AMReX_REAL.H>
+#include <memory>
 #ifdef WARPX_QED
 #   include "Particles/ElementaryProcess/QEDInternals/BreitWheelerEngineWrapper.H"
 #   include "Particles/ElementaryProcess/QEDInternals/QuantumSyncEngineWrapper.H"
@@ -30,6 +32,8 @@
 #include "Particles/Pusher/UpdateMomentumHigueraCary.H"
 #include "Particles/Pusher/UpdateMomentumVay.H"
 #include "Particles/Pusher/UpdatePosition.H"
+#include "Particles/Spin/UpdateSpin.H"
+#include "Particles/Spin/SpinGenerator.H"
 #include "Particles/SpeciesPhysicalProperties.H"
 #include "Particles/WarpXParticleContainer.H"
 #include "Utils/Parser/ParserUtils.H"
@@ -429,7 +433,32 @@ PhysicalParticleContainer::PhysicalParticleContainer (AmrCore* amr_core, int isp
       amrex::Abort("Saving previous particle positions not yet implemented in RZ");
 #endif
     }
-
+    pp_species_name.query("track_spin", m_track_spin);
+    if (m_track_spin) {
+        AddRealComp("sx");
+        AddRealComp("sy");
+        AddRealComp("sz");
+        AddRealComp("ux_prev");
+        AddRealComp("uy_prev");
+        AddRealComp("uz_prev");
+        // Initialize the spin
+        std::string spin_init_method = "random";
+        pp_species_name.query("spin_init_method", spin_init_method);
+        if (spin_init_method == "constants") {
+            // amrex::Abort("Spin initialization method not recognized");
+            // pp_species_name.query("spin_init_x", m_spin_init_x);
+            // pp_species_name.query("spin_init_y", m_spin_init_y);
+            // pp_species_name.query("spin_init_z", m_spin_init_z);
+            utils::parser::queryWithParser(pp_species_name, "spin_init_x", m_spin_init_x);
+            utils::parser::queryWithParser(pp_species_name, "spin_init_y", m_spin_init_y);
+            utils::parser::queryWithParser(pp_species_name, "spin_init_z", m_spin_init_z);
+            m_spin_init_method = 1;
+        } else {
+            m_spin_init_method = 0;
+        }
+        // Read the Larmor radius and anomalous magnetic moment
+        utils::parser::queryWithParser(pp_species_name, "spin_anom", m_anomalous_magnetic_moment);    
+    }
     // Read reflection models for absorbing boundaries; defaults to a zero
     pp_species_name.query("reflection_model_xlo(E)", m_boundary_conditions.reflection_model_xlo_str);
     pp_species_name.query("reflection_model_xhi(E)", m_boundary_conditions.reflection_model_xhi_str);
@@ -1221,6 +1250,28 @@ PhysicalParticleContainer::AddPlasma (PlasmaInjector const& plasma_injector, int
                 m_shr_p_bw_engine->build_optical_depth_functor();
         }
 #endif
+        amrex::ParticleReal* p_track_spin_x = nullptr;
+        amrex::ParticleReal* p_track_spin_y = nullptr;
+        amrex::ParticleReal* p_track_spin_z = nullptr;
+
+        const bool loc_has_spin = has_spin();
+        if(loc_has_spin){
+            p_track_spin_x = soa.GetRealData(
+                particle_comps["sx"]).data() + old_size;
+            p_track_spin_y = soa.GetRealData(
+                particle_comps["sy"]).data() + old_size;
+            p_track_spin_z = soa.GetRealData(
+                particle_comps["sz"]).data() + old_size;
+        }
+        
+        RandSpinGenerator spin_gen;
+        // SpinGeneratorWrapper spin_gen_wrapper;
+        // if (m_spin_init_method == 0) {
+        //     spin_gen_wrapper.setSpinGenerator(std::make_unique<RandSpinGenerator>());
+        // } else {
+        //     spin_gen_wrapper.setSpinGenerator(std::make_unique<UniformSpinGenerator>(m_spin_init_x, m_spin_init_y, m_spin_init_z));
+        // }
+        // SpinGenerator* spin_gen = spin_gen_wrapper.getSpinGenerator();
 
         const bool loc_do_field_ionization = do_field_ionization;
         const int loc_ionization_initial_level = ionization_initial_level;
@@ -1407,6 +1458,30 @@ PhysicalParticleContainer::AddPlasma (PlasmaInjector const& plasma_injector, int
                     p_optical_depth_BW[ip] = breit_wheeler_get_opt(engine);
                 }
 #endif
+                if(loc_has_spin){
+                    // if(m_spin_init_method == 1){
+                    //     p_track_spin_x[ip] = m_spin_init_x;
+                    //     p_track_spin_y[ip] = m_spin_init_y;
+                    //     p_track_spin_z[ip] = m_spin_init_z;
+                    // } else if(m_spin_init_method == 0){
+                    //     rand_spin_gen(p_track_spin_x[ip], p_track_spin_y[ip], p_track_spin_z[ip], engine);
+                    // }
+                    // spin_gen(p_track_spin_x[ip], p_track_spin_y[ip], p_track_spin_z[ip], engine);
+                    // spin_gen->operator()(p_track_spin_x[ip], p_track_spin_y[ip], p_track_spin_z[ip], engine);
+
+                    p_track_spin_x[ip] = 0.0_rt;
+                    p_track_spin_y[ip] = 0.0_rt;
+                    p_track_spin_z[ip] = 1.0_rt;
+
+                    // amrex::Real sx = p_track_spin_x[ip], sy = p_track_spin_y[ip], sz = p_track_spin_z[ip];
+                    // rand_spin_gen(sx, sy, sz, engine);
+                    // p_track_spin_x[ip] = sx;
+                    // p_track_spin_y[ip] = sy;
+                    // p_track_spin_z[ip] = sz;
+
+                    // rand_spin_gen(p_track_spin_x[ip], p_track_spin_y[ip], p_track_spin_z[ip], engine);
+                }
+
                 // Initialize user-defined integers with user-defined parser
                 for (int ia = 0; ia < n_user_int_attribs; ++ia) {
                     pa_user_int_data[ia][ip] = static_cast<int>(user_int_parserexec_data[ia](pos.x, pos.y, pos.z, u.x, u.y, u.z, t));
@@ -1777,6 +1852,28 @@ PhysicalParticleContainer::AddPlasmaFlux (PlasmaInjector const& plasma_injector,
                 m_shr_p_bw_engine->build_optical_depth_functor();
         }
 #endif
+        amrex::ParticleReal* p_track_spin_x = nullptr;
+        amrex::ParticleReal* p_track_spin_y = nullptr;
+        amrex::ParticleReal* p_track_spin_z = nullptr;
+
+        const bool loc_has_spin = has_spin();
+        if(loc_has_spin){
+            p_track_spin_x = soa.GetRealData(
+                particle_comps["sx"]).data() + old_size;
+            p_track_spin_y = soa.GetRealData(
+                particle_comps["sy"]).data() + old_size;
+            p_track_spin_z = soa.GetRealData(
+                particle_comps["sz"]).data() + old_size;
+        }
+
+        RandSpinGenerator spin_gen;
+        // SpinGeneratorWrapper spin_gen_wrapper;
+        // if (m_spin_init_method == 0) {
+        //     spin_gen_wrapper.setSpinGenerator(std::make_unique<RandSpinGenerator>());
+        // } else {
+        //     spin_gen_wrapper.setSpinGenerator(std::make_unique<UniformSpinGenerator>(m_spin_init_x, m_spin_init_y, m_spin_init_z));
+        // }
+        // SpinGenerator* spin_gen = spin_gen_wrapper.getSpinGenerator();
 
         const bool loc_do_field_ionization = do_field_ionization;
         const int loc_ionization_initial_level = ionization_initial_level;
@@ -1893,6 +1990,30 @@ PhysicalParticleContainer::AddPlasmaFlux (PlasmaInjector const& plasma_injector,
                     p_optical_depth_BW[ip] = breit_wheeler_get_opt(engine);
                 }
 #endif
+                if(loc_has_spin){
+                    // if(m_spin_init_method == "constants"){
+                    //     p_track_spin_x[ip] = m_spin_init_x;
+                    //     p_track_spin_y[ip] = m_spin_init_y;
+                    //     p_track_spin_z[ip] = m_spin_init_z;
+                    // } else if(m_spin_init_method == "random"){
+                    //     rand_spin_gen(p_track_spin_x[ip], p_track_spin_y[ip], p_track_spin_z[ip], engine);
+                    // }
+                    // spin_gen(p_track_spin_x[ip], p_track_spin_y[ip], p_track_spin_z[ip], engine);
+                    // spin_gen->operator()(p_track_spin_x[ip], p_track_spin_y[ip], p_track_spin_z[ip], engine);
+
+                    p_track_spin_x[ip] = 0.0_rt;
+                    p_track_spin_y[ip] = 0.0_rt;
+                    p_track_spin_z[ip] = 1.0_rt;
+                    
+                    // amrex::Real sx, sy, sz;
+                    // rand_spin_gen(sx, sy, sz, engine);
+                    // p_track_spin_x[ip] = sx;
+                    // p_track_spin_y[ip] = sy;
+                    // p_track_spin_z[ip] = sz;
+
+                    // rand_spin_gen(p_track_spin_x[ip], p_track_spin_y[ip], p_track_spin_z[ip], engine);
+                }
+
                 // Initialize user-defined integers with user-defined parser
                 for (int ia = 0; ia < n_user_int_attribs; ++ia) {
                     pa_user_int_data[ia][ip] = static_cast<int>(user_int_parserexec_data[ia](pos.x, pos.y, pos.z, u.x, u.y, u.z, t));
@@ -2842,6 +2963,33 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
     }
 #endif
 
+    amrex::ParticleReal* AMREX_RESTRICT ux_prev = nullptr;
+    amrex::ParticleReal* AMREX_RESTRICT uy_prev = nullptr;
+    amrex::ParticleReal* AMREX_RESTRICT uz_prev = nullptr;
+    amrex::ParticleReal* AMREX_RESTRICT sx = nullptr;
+    amrex::ParticleReal* AMREX_RESTRICT sy = nullptr;
+    amrex::ParticleReal* AMREX_RESTRICT sz = nullptr;
+    const amrex::ParticleReal tauconst = dt * q / ( 2 * m );
+    const amrex::ParticleReal anom = this->m_anomalous_magnetic_moment;
+    const bool local_has_spin = has_spin();
+    if(local_has_spin){
+        sx = pti.GetAttribs(particle_comps["sx"]).dataPtr() + offset;
+        sy = pti.GetAttribs(particle_comps["sy"]).dataPtr() + offset;
+        sz = pti.GetAttribs(particle_comps["sz"]).dataPtr() + offset;
+        ux_prev = pti.GetAttribs(particle_comps["ux_prev"]).dataPtr() + offset;
+        uy_prev = pti.GetAttribs(particle_comps["uy_prev"]).dataPtr() + offset;
+        uz_prev = pti.GetAttribs(particle_comps["uz_prev"]).dataPtr() + offset;
+    }else{
+        amrex::ignore_unused(sx);
+        amrex::ignore_unused(sy);
+        amrex::ignore_unused(sz);
+        amrex::ignore_unused(ux_prev);
+        amrex::ignore_unused(uy_prev);
+        amrex::ignore_unused(uz_prev);
+        amrex::ignore_unused(tauconst);
+        amrex::ignore_unused(anom);
+    }
+
     const auto t_do_not_gather = do_not_gather;
 
     enum exteb_flags : int { no_exteb, has_exteb };
@@ -2874,6 +3022,12 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
             y_old[ip] = yp;
 #endif
             z_old[ip] = zp;
+        }
+
+        if(local_has_spin){
+            ux_prev[ip] = ux[ip];
+            uy_prev[ip] = uy[ip];
+            uz_prev[ip] = uz[ip];
         }
 
         amrex::ParticleReal Exp = Ex_external_particle;
@@ -2955,6 +3109,10 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
 #else
             amrex::ignore_unused(qed_control);
 #endif
+        if(local_has_spin){
+            UpdateSpin(sx[ip], sy[ip], sz[ip], ux_prev[ip], uy_prev[ip], uz_prev[ip], ux[ip], uy[ip], uz[ip],
+                        Exp, Eyp, Ezp, Bxp, Byp, Bzp, tauconst, anom);
+        }
     });
 }
 
@@ -3378,6 +3536,11 @@ bool PhysicalParticleContainer::has_quantum_sync () const
 bool PhysicalParticleContainer::has_breit_wheeler () const
 {
     return m_do_qed_breit_wheeler;
+}
+
+bool PhysicalParticleContainer::has_spin () const
+{
+    return m_track_spin;
 }
 
 void
