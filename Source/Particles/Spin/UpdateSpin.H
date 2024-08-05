@@ -6,35 +6,6 @@
 #include <AMReX.H>
 #include <AMReX_FArrayBox.H>
 #include <cmath>
-// #include <random>
-
-// // Function to initialize a random point on a sphere
-// AMREX_GPU_HOST_DEVICE AMREX_INLINE
-// void InitSpin(
-//     amrex::Real& sx_f, amrex::Real& sy_f, amrex::Real& sz_f,
-//     amrex::Real radius = 1.0)
-// {
-//     // Setup random number generators
-//     std::random_device rd;
-//     std::mt19937 gen(rd());
-//     std::uniform_real_distribution<> dis(-radius, radius);
-//     std::uniform_real_distribution<> phi_dis(0, 2 * M_PI);
-
-//     // Generate z coordinate
-//     amrex::Real z = dis(gen);
-//     // Generate azimuthal angle
-//     amrex::Real phi = phi_dis(gen);
-//     // Calculate sin(theta) based on z
-//     amrex::Real sin_theta = std::sin(std::acos(z / radius));
-//     // Calculate cartesian coordinates x and y
-//     amrex::Real x = sin_theta * std::cos(phi);
-//     amrex::Real y = sin_theta * std::sin(phi);
-
-//     // Assign the values to output references
-//     sx_f = x;
-//     sy_f = y;
-//     sz_f = z;
-// }
 
 using namespace amrex::literals;
 
@@ -54,10 +25,6 @@ void UpdateSpin(
     amrex::ParticleReal uy = (uy_i + uy_f) / 2._prt;
     amrex::ParticleReal uz = (uz_i + uz_f) / 2._prt;
 
-    // constexpr amrex::ParticleReal inv_c2 = 1._prt/(PhysConst::c*PhysConst::c);
-    // // Compute inverse Lorentz factor
-    // const amrex::ParticleReal inv_gamma = 1._prt/std::sqrt(1._prt + (ux*ux + uy*uy + uz*uz)*inv_c2);
-
     // convert to be beta
     ux /= PhysConst::c;
     uy /= PhysConst::c;
@@ -68,11 +35,6 @@ void UpdateSpin(
 
     // Define parameter: 1./(1+gamma)
     const amrex::ParticleReal inv_1pgamma = inv_gamma / (1._prt + inv_gamma);
-
-    // const amrex::ParticleReal gamma = 1.0 / inv_gamma;  // 计算gamma
-    // ux = ux * gamma / PhysConst::c;
-    // uy = uy * gamma / PhysConst::c;
-    // uz = uz * gamma / PhysConst::c;
 
     // Scalar product of momentum and B field
     amrex::ParticleReal uB = (ux*Bx + uy*By + uz*Bz);
