@@ -1264,7 +1264,7 @@ PhysicalParticleContainer::AddPlasma (PlasmaInjector const& plasma_injector, int
                 particle_comps["sz"]).data() + old_size;
         }
         
-        RandSpinGenerator spin_gen;
+        // RandSpinGenerator spin_gen;
         // SpinGeneratorWrapper spin_gen_wrapper;
         // if (m_spin_init_method == 0) {
         //     spin_gen_wrapper.setSpinGenerator(std::make_unique<RandSpinGenerator>());
@@ -1866,7 +1866,7 @@ PhysicalParticleContainer::AddPlasmaFlux (PlasmaInjector const& plasma_injector,
                 particle_comps["sz"]).data() + old_size;
         }
 
-        RandSpinGenerator spin_gen;
+        // RandSpinGenerator spin_gen;
         // SpinGeneratorWrapper spin_gen_wrapper;
         // if (m_spin_init_method == 0) {
         //     spin_gen_wrapper.setSpinGenerator(std::make_unique<RandSpinGenerator>());
