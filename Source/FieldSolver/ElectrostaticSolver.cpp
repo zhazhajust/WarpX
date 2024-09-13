@@ -7,6 +7,7 @@
 #include "WarpX.H"
 
 #include "FieldSolver/ElectrostaticSolver.H"
+#include "EmbeddedBoundary/Enabled.H"
 #include "Fluids/MultiFluidContainer.H"
 #include "Fluids/WarpXFluidContainer.H"
 #include "Parallelization/GuardCellManager.H"
@@ -55,6 +56,7 @@
 #include <string>
 
 using namespace amrex;
+using namespace warpx::fields;
 
 void
 WarpX::ComputeSpaceChargeField (bool const reset_fields)
@@ -88,7 +90,8 @@ WarpX::ComputeSpaceChargeField (bool const reset_fields)
         }
 
         // Add the field due to the boundary potentials
-        if (electrostatic_solver_id == ElectrostaticSolverAlgo::Relativistic){
+        if (m_boundary_potential_specified ||
+                (electrostatic_solver_id == ElectrostaticSolverAlgo::Relativistic)){
             AddBoundaryField();
         }
     }
@@ -145,6 +148,10 @@ WarpX::AddSpaceChargeField (WarpXParticleContainer& pc)
 {
     WARPX_PROFILE("WarpX::AddSpaceChargeField");
 
+    if (pc.getCharge() == 0) {
+        return;
+    }
+
     // Store the boundary conditions for the field solver if they haven't been
     // stored yet
     if (!m_poisson_boundary_handler.bcs_set) {
@@ -159,6 +166,7 @@ WarpX::AddSpaceChargeField (WarpXParticleContainer& pc)
     // Allocate fields for charge and potential
     const int num_levels = max_level + 1;
     Vector<std::unique_ptr<MultiFab> > rho(num_levels);
+    Vector<std::unique_ptr<MultiFab> > rho_coarse(num_levels); // Used in order to interpolate between levels
     Vector<std::unique_ptr<MultiFab> > phi(num_levels);
     // Use number of guard cells used for local deposition of rho
     const amrex::IntVect ng = guard_cells.ng_depos_rho;
@@ -169,15 +177,33 @@ WarpX::AddSpaceChargeField (WarpXParticleContainer& pc)
         rho[lev]->setVal(0.);
         phi[lev] = std::make_unique<MultiFab>(nba, DistributionMap(lev), 1, 1);
         phi[lev]->setVal(0.);
+        if (lev > 0) {
+            // For MR levels: allocated the coarsened version of rho
+            BoxArray cba = nba;
+            cba.coarsen(refRatio(lev-1));
+            rho_coarse[lev] = std::make_unique<MultiFab>(cba, DistributionMap(lev), 1, ng);
+            rho_coarse[lev]->setVal(0.);
+        }
     }
 
     // Deposit particle charge density (source of Poisson solver)
-    bool const local = false;
+    // The options below are identical to those in MultiParticleContainer::DepositCharge
+    bool const local = true;
     bool const reset = false;
     bool const apply_boundary_and_scale_volume = true;
+    bool const interpolate_across_levels = false;
     if ( !pc.do_not_deposit) {
-        pc.DepositCharge(rho, local, reset, apply_boundary_and_scale_volume);
+        pc.DepositCharge(rho, local, reset, apply_boundary_and_scale_volume,
+                              interpolate_across_levels);
     }
+    for (int lev = 0; lev <= max_level; lev++) {
+        if (lev > 0) {
+            if (charge_buf[lev]) {
+                charge_buf[lev]->setVal(0.);
+            }
+        }
+    }
+    SyncRho(rho, rho_coarse, charge_buf); // Apply filter, perform MPI exchange, interpolate across levels
 
     // Get the particle beta vector
     bool const local_average = false; // Average across all MPI ranks
@@ -220,7 +246,13 @@ WarpX::AddSpaceChargeFieldLabFrame ()
         int const lev = 0;
         myfl->DepositCharge( lev, *rho_fp[lev] );
     }
-
+    for (int lev = 0; lev <= max_level; lev++) {
+        if (lev > 0) {
+            if (charge_buf[lev]) {
+                charge_buf[lev]->setVal(0.);
+            }
+        }
+    }
     SyncRho(rho_fp, rho_cp, charge_buf); // Apply filter, perform MPI exchange, interpolate across levels
 #ifndef WARPX_DIM_RZ
     for (int lev = 0; lev <= finestLevel(); lev++) {
@@ -248,7 +280,7 @@ WarpX::AddSpaceChargeFieldLabFrame ()
         // Use the tridiag solver with 1D
         computePhiTriDiagonal(rho_fp, phi_fp);
 #else
-        // Use the AMREX MLMG solver otherwise
+        // Use the AMREX MLMG or the FFT (IGF) solver otherwise
         computePhi(rho_fp, phi_fp, beta, self_fields_required_precision,
                    self_fields_absolute_tolerance, self_fields_max_iters,
                    self_fields_verbosity);
@@ -258,11 +290,10 @@ WarpX::AddSpaceChargeFieldLabFrame ()
 
     // Compute the electric field. Note that if an EB is used the electric
     // field will be calculated in the computePhi call.
-#ifndef AMREX_USE_EB
-    computeE( Efield_fp, phi_fp, beta );
-#else
-    if ( IsPythonCallbackInstalled("poissonsolver") ) computeE( Efield_fp, phi_fp, beta );
-#endif
+    if (!EB::enabled()) { computeE( Efield_fp, phi_fp, beta ); }
+    else {
+        if (IsPythonCallbackInstalled("poissonsolver")) { computeE(Efield_fp, phi_fp, beta); }
+    }
 
     // Compute the magnetic field
     computeB( Bfield_fp, phi_fp, beta );
@@ -292,64 +323,68 @@ WarpX::computePhi (const amrex::Vector<std::unique_ptr<amrex::MultiFab> >& rho,
                    Real const required_precision,
                    Real absolute_tolerance,
                    int const max_iters,
-                   int const verbosity) const
-{
+                   int const verbosity) const {
     // create a vector to our fields, sorted by level
-    amrex::Vector<amrex::MultiFab*> sorted_rho;
-    amrex::Vector<amrex::MultiFab*> sorted_phi;
+    amrex::Vector<amrex::MultiFab *> sorted_rho;
+    amrex::Vector<amrex::MultiFab *> sorted_phi;
     for (int lev = 0; lev <= finest_level; ++lev) {
         sorted_rho.emplace_back(rho[lev].get());
         sorted_phi.emplace_back(phi[lev].get());
     }
 
-#if defined(AMREX_USE_EB)
-
     std::optional<ElectrostaticSolver::EBCalcEfromPhiPerLevel> post_phi_calculation;
-
-    // EB: use AMReX to directly calculate the electric field since with EB's the
-    // simple finite difference scheme in WarpX::computeE sometimes fails
-    if (electrostatic_solver_id == ElectrostaticSolverAlgo::LabFrame ||
-        electrostatic_solver_id == ElectrostaticSolverAlgo::LabFrameElectroMagnetostatic)
-    {
-        // TODO: maybe make this a helper function or pass Efield_fp directly
-        amrex::Vector<
-            amrex::Array<amrex::MultiFab *, AMREX_SPACEDIM>
-        > e_field;
-        for (int lev = 0; lev <= finest_level; ++lev) {
-            e_field.push_back(
-#   if defined(WARPX_DIM_1D_Z)
-                amrex::Array<amrex::MultiFab*, 1>{
-                    get_pointer_Efield_fp(lev, 2)
-                }
-#   elif defined(WARPX_DIM_XZ) || defined(WARPX_DIM_RZ)
-                amrex::Array<amrex::MultiFab*, 2>{
-                    get_pointer_Efield_fp(lev, 0),
-                    get_pointer_Efield_fp(lev, 2)
-                }
-#   elif defined(WARPX_DIM_3D)
-                amrex::Array<amrex::MultiFab *, 3>{
-                    get_pointer_Efield_fp(lev, 0),
-                    get_pointer_Efield_fp(lev, 1),
-                    get_pointer_Efield_fp(lev, 2)
-                }
-#   endif
-            );
-        }
-        post_phi_calculation = ElectrostaticSolver::EBCalcEfromPhiPerLevel(e_field);
-    }
-
+#ifdef AMREX_USE_EB
     std::optional<amrex::Vector<amrex::EBFArrayBoxFactory const *> > eb_farray_box_factory;
-    amrex::Vector<
-        amrex::EBFArrayBoxFactory const *
-    > factories;
-    for (int lev = 0; lev <= finest_level; ++lev) {
-        factories.push_back(&WarpX::fieldEBFactory(lev));
-    }
-    eb_farray_box_factory = factories;
 #else
-    const std::optional<ElectrostaticSolver::EBCalcEfromPhiPerLevel> post_phi_calculation;
-    const std::optional<amrex::Vector<amrex::FArrayBoxFactory const *> > eb_farray_box_factory;
+    std::optional<amrex::Vector<amrex::FArrayBoxFactory const *> > const eb_farray_box_factory;
 #endif
+    if (EB::enabled())
+    {
+        // EB: use AMReX to directly calculate the electric field since with EB's the
+        // simple finite difference scheme in WarpX::computeE sometimes fails
+        if (electrostatic_solver_id == ElectrostaticSolverAlgo::LabFrame ||
+            electrostatic_solver_id == ElectrostaticSolverAlgo::LabFrameElectroMagnetostatic)
+        {
+            // TODO: maybe make this a helper function or pass Efield_fp directly
+            amrex::Vector<
+                amrex::Array<amrex::MultiFab *, AMREX_SPACEDIM>
+            > e_field;
+            for (int lev = 0; lev <= finest_level; ++lev) {
+                e_field.push_back(
+#   if defined(WARPX_DIM_1D_Z)
+                    amrex::Array<amrex::MultiFab*, 1>{
+                        getFieldPointer(FieldType::Efield_fp, lev, 2)
+                    }
+#   elif defined(WARPX_DIM_XZ) || defined(WARPX_DIM_RZ)
+                    amrex::Array<amrex::MultiFab*, 2>{
+                        getFieldPointer(FieldType::Efield_fp, lev, 0),
+                        getFieldPointer(FieldType::Efield_fp, lev, 2)
+                    }
+#   elif defined(WARPX_DIM_3D)
+                    amrex::Array<amrex::MultiFab *, 3>{
+                        getFieldPointer(FieldType::Efield_fp, lev, 0),
+                        getFieldPointer(FieldType::Efield_fp, lev, 1),
+                        getFieldPointer(FieldType::Efield_fp, lev, 2)
+                    }
+#   endif
+                );
+            }
+            post_phi_calculation = ElectrostaticSolver::EBCalcEfromPhiPerLevel(e_field);
+        }
+
+#ifdef AMREX_USE_EB
+        amrex::Vector<
+            amrex::EBFArrayBoxFactory const *
+        > factories;
+        for (int lev = 0; lev <= finest_level; ++lev) {
+            factories.push_back(&WarpX::fieldEBFactory(lev));
+        }
+        eb_farray_box_factory = factories;
+#endif
+    }
+
+    bool const is_solver_igf_on_lev0 =
+        WarpX::poisson_solver_id == PoissonSolverAlgo::IntegratedGreenFunction;
 
     ablastr::fields::computePhi(
         sorted_rho,
@@ -362,7 +397,10 @@ WarpX::computePhi (const amrex::Vector<std::unique_ptr<amrex::MultiFab> >& rho,
         this->geom,
         this->dmap,
         this->grids,
+        WarpX::grid_type,
         this->m_poisson_boundary_handler,
+        is_solver_igf_on_lev0,
+        EB::enabled(),
         WarpX::do_single_precision_comms,
         this->ref_ratio,
         post_phi_calculation,
@@ -1000,6 +1038,7 @@ void ElectrostaticSolver::PoissonBoundaryHandler::definePhiBCs (const amrex::Geo
     amrex::ignore_unused(geom);
 #endif
     for (int idim=dim_start; idim<AMREX_SPACEDIM; idim++){
+    if (WarpX::poisson_solver_id == PoissonSolverAlgo::Multigrid){
         if ( WarpX::field_boundary_lo[idim] == FieldBoundaryType::Periodic
              && WarpX::field_boundary_hi[idim] == FieldBoundaryType::Periodic ) {
             lobc[idim] = LinOpBCType::Periodic;
@@ -1018,9 +1057,9 @@ void ElectrostaticSolver::PoissonBoundaryHandler::definePhiBCs (const amrex::Geo
                 dirichlet_flag[idim*2] = false;
             }
             else {
-                WARPX_ALWAYS_ASSERT_WITH_MESSAGE(false,
+                WARPX_ABORT_WITH_MESSAGE(
                     "Field boundary conditions have to be either periodic, PEC or neumann "
-                    "when using the electrostatic solver"
+                    "when using the electrostatic Multigrid solver,  but they are " + GetFieldBCTypeString(WarpX::field_boundary_lo[idim])
                 );
             }
 
@@ -1033,12 +1072,40 @@ void ElectrostaticSolver::PoissonBoundaryHandler::definePhiBCs (const amrex::Geo
                 dirichlet_flag[idim*2+1] = false;
             }
             else {
-                WARPX_ALWAYS_ASSERT_WITH_MESSAGE(false,
+                WARPX_ABORT_WITH_MESSAGE(
                     "Field boundary conditions have to be either periodic, PEC or neumann "
-                    "when using the electrostatic solver"
+                    "when using the electrostatic Multigrid solver,  but they are " + GetFieldBCTypeString(WarpX::field_boundary_hi[idim])
                 );
             }
         }
+
+        WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
+            (WarpX::field_boundary_lo[idim] != FieldBoundaryType::Open &&
+            WarpX::field_boundary_hi[idim] != FieldBoundaryType::Open &&
+            WarpX::field_boundary_lo[idim] != FieldBoundaryType::PML &&
+            WarpX::field_boundary_hi[idim] != FieldBoundaryType::PML) ,
+            "Open and PML field boundary conditions only work with "
+            "warpx.poisson_solver = fft."
+        );
+    }
+    else if (WarpX::poisson_solver_id == PoissonSolverAlgo::IntegratedGreenFunction){
+            if (WarpX::electrostatic_solver_id != ElectrostaticSolverAlgo::None){
+                WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
+                    (WarpX::field_boundary_lo[idim] == FieldBoundaryType::Open &&
+                    WarpX::field_boundary_hi[idim] == FieldBoundaryType::Open),
+                    "The FFT Poisson solver only works with field open boundary conditions "
+                    "in electrostatic mode."
+                );
+            }
+            else{ // if electromagnetic mode on with species.initialize_self_fields = 1
+                WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
+                    (WarpX::field_boundary_lo[idim] == FieldBoundaryType::PML &&
+                    WarpX::field_boundary_hi[idim] == FieldBoundaryType::PML),
+                    "The FFT Poisson solver only works with field PML boundary conditions "
+                    "to initialize the self-fields of the species in electromagnetic mode."
+                );
+            }
+    }
     }
     bcs_set = true;
 }

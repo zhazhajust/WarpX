@@ -7,6 +7,7 @@
 #include "WarpX.H"
 
 #include "FieldSolver/MagnetostaticSolver/MagnetostaticSolver.H"
+#include "EmbeddedBoundary/Enabled.H"
 #include "Parallelization/GuardCellManager.H"
 #include "Particles/MultiParticleContainer.H"
 #include "Particles/WarpXParticleContainer.H"
@@ -184,6 +185,7 @@ WarpX::computeVectorPotential (const amrex::Vector<amrex::Array<std::unique_ptr<
         this->dmap,
         this->grids,
         this->m_vector_poisson_boundary_handler,
+        EB::enabled(),
         WarpX::do_single_precision_comms,
         this->ref_ratio,
         post_A_calculation,
@@ -318,9 +320,9 @@ void MagnetostaticSolver::VectorPoissonBoundaryHandler::defineVectorPotentialBCs
                     dirichlet_flag[adim][idim*2] = false;
                 }
                 else {
-                    WARPX_ALWAYS_ASSERT_WITH_MESSAGE(false,
-                        "Field boundary conditions have to be either periodic, PEC, or Neumann "
-                        "when using the magnetostatic solver"
+                    WARPX_ABORT_WITH_MESSAGE(
+                        "Field boundary conditions have to be either periodic, PEC or neumann "
+                        "when using the magnetostatic solver,  but they are " + GetFieldBCTypeString(WarpX::field_boundary_lo[idim])
                     );
                 }
 
@@ -338,9 +340,9 @@ void MagnetostaticSolver::VectorPoissonBoundaryHandler::defineVectorPotentialBCs
                     dirichlet_flag[adim][idim*2+1] = false;
                 }
                 else {
-                    WARPX_ALWAYS_ASSERT_WITH_MESSAGE(false,
-                        "Field boundary conditions have to be either periodic, PEC, or Neumann "
-                        "when using the magnetostatic solver"
+                    WARPX_ABORT_WITH_MESSAGE(
+                        "Field boundary conditions have to be either periodic, PEC or neumann "
+                        "when using the magnetostatic solver,  but they are " + GetFieldBCTypeString(WarpX::field_boundary_lo[idim])
                     );
                 }
             }

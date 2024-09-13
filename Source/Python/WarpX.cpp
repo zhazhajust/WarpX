@@ -14,7 +14,7 @@
 #include <FieldSolver/FiniteDifferenceSolver/FiniteDifferenceSolver.H>
 #include <FieldSolver/FiniteDifferenceSolver/MacroscopicProperties/MacroscopicProperties.H>
 #include <FieldSolver/FiniteDifferenceSolver/HybridPICModel/HybridPICModel.H>
-#ifdef WARPX_USE_PSATD
+#ifdef WARPX_USE_FFT
 #   include <FieldSolver/SpectralSolver/SpectralKSpace.H>
 #   ifdef WARPX_DIM_RZ
 #       include <FieldSolver/SpectralSolver/SpectralSolverRZ.H>
@@ -198,6 +198,10 @@ The physical fields in WarpX have the following naming:
             },
             py::arg("potential"),
             "Sets the EB potential string and updates the function parser."
+        )
+        .def_static("run_div_cleaner",
+            [] () { WarpX::ProjectionCleanDivB(); },
+            "Executes projection based divergence cleaner on loaded Bfield_fp_external."
         )
     ;
 

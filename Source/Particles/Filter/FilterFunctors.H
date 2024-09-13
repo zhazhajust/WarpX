@@ -4,8 +4,8 @@
  *
  * License: BSD-3-Clause-LBNL
  */
-#ifndef FILTERFUNCTORS_H
-#define FILTERFUNCTORS_H
+#ifndef WARPX_FILTERFUNCTORS_H
+#define WARPX_FILTERFUNCTORS_H
 
 #include "Particles/Pusher/GetAndSetPosition.H"
 #include "Particles/WarpXParticleContainer.H"
@@ -177,4 +177,4 @@ private:
     const amrex::RealBox m_domain;
 };
 
-#endif // FILTERFUNCTORS_H
+#endif // WARPX_FILTERFUNCTORS_H

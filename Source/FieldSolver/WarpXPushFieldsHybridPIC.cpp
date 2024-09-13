@@ -88,9 +88,6 @@ void WarpX::HybridPICEvolveFields ()
         }
     }
 
-    // Calculate the electron pressure at t=n using rho^n
-    m_hybrid_pic_model->CalculateElectronPressure(DtType::FirstHalf);
-
     // Push the B field from t=n to t=n+1/2 using the current and density
     // at t=n, while updating the E field along with B using the electron
     // momentum equation
@@ -115,9 +112,6 @@ void WarpX::HybridPICEvolveFields ()
             0.5_rt, *rho_fp[lev], 0, 0, 1, rho_fp_temp[lev]->nGrowVect()
         );
     }
-
-    // Calculate the electron pressure at t=n+1/2
-    m_hybrid_pic_model->CalculateElectronPressure(DtType::SecondHalf);
 
     // Now push the B field from t=n+1/2 to t=n+1 using the n+1/2 quantities
     for (int sub_step = 0; sub_step < sub_steps; sub_step++)
@@ -149,13 +143,12 @@ void WarpX::HybridPICEvolveFields ()
     }
 
     // Calculate the electron pressure at t=n+1
-    m_hybrid_pic_model->CalculateElectronPressure(DtType::Full);
+    m_hybrid_pic_model->CalculateElectronPressure();
 
     // Update the E field to t=n+1 using the extrapolated J_i^n+1 value
     m_hybrid_pic_model->CalculateCurrentAmpere(Bfield_fp, m_edge_lengths);
     m_hybrid_pic_model->HybridPICSolveE(
-        Efield_fp, current_fp_temp, Bfield_fp, rho_fp, m_edge_lengths,
-        false
+        Efield_fp, current_fp_temp, Bfield_fp, rho_fp, m_edge_lengths, false
     );
     FillBoundaryE(guard_cells.ng_FieldSolver, WarpX::sync_nodal_points);
 
