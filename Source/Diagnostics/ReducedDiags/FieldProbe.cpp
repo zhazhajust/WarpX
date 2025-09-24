@@ -492,34 +492,14 @@ void FieldProbe::ComputeDiags (int step)
                 }
             }
         }
-        // const amrex::MultiFab& (WarpX::*getEfieldFunc) (int lev, int direction);
-        // const amrex::MultiFab& (WarpX::*getBfieldFunc) (int lev, int direction);
-
-        // getEfieldFunc = &WarpX::getEfield;
-        // getBfieldFunc = &WarpX::getBfield;
 
         // get MultiFab data at lev
-<<<<<<< HEAD
-        // const amrex::MultiFab &Ex = (warpx.*getEfieldFunc)(lev, 0);
-        // const amrex::MultiFab &Ey = (warpx.*getEfieldFunc)(lev, 1);
-        // const amrex::MultiFab &Ez = (warpx.*getEfieldFunc)(lev, 2);
-        // const amrex::MultiFab &Bx = (warpx.*getBfieldFunc)(lev, 0);
-        // const amrex::MultiFab &By = (warpx.*getBfieldFunc)(lev, 1);
-        // const amrex::MultiFab &Bz = (warpx.*getBfieldFunc)(lev, 2);
-        const amrex::MultiFab &Ex = warpx.getField(FieldType::Efield_aux, lev, 0);
-        const amrex::MultiFab &Ey = warpx.getField(FieldType::Efield_aux, lev, 1);
-        const amrex::MultiFab &Ez = warpx.getField(FieldType::Efield_aux, lev, 2);
-        const amrex::MultiFab &Bx = warpx.getField(FieldType::Bfield_aux, lev, 0);
-        const amrex::MultiFab &By = warpx.getField(FieldType::Bfield_aux, lev, 1);
-        const amrex::MultiFab &Bz = warpx.getField(FieldType::Bfield_aux, lev, 2);
-=======
         const amrex::MultiFab &Ex = *warpx.m_fields.get(FieldType::Efield_aux, Direction{0}, lev);
         const amrex::MultiFab &Ey = *warpx.m_fields.get(FieldType::Efield_aux, Direction{1}, lev);
         const amrex::MultiFab &Ez = *warpx.m_fields.get(FieldType::Efield_aux, Direction{2}, lev);
         const amrex::MultiFab &Bx = *warpx.m_fields.get(FieldType::Bfield_aux, Direction{0}, lev);
         const amrex::MultiFab &By = *warpx.m_fields.get(FieldType::Bfield_aux, Direction{1}, lev);
         const amrex::MultiFab &Bz = *warpx.m_fields.get(FieldType::Bfield_aux, Direction{2}, lev);
->>>>>>> upstream/development
 
         /*
          * Prepare interpolation of field components to probe_position
@@ -925,93 +905,8 @@ void FieldProbe::WriteToFileOpenPMD (int step, std::vector<amrex::Real> sorted_d
                 .storeChunk(curr, openPMD::Offset{offset}, openPMD::Extent{(uint64_t) np});
             m_Series.flush();
         }
-<<<<<<< HEAD
     }
     m_Series.flush();
     currIteration.close();
     m_Series.close();
-
-    ////////////////////////////////////////////
-
-    // auto & warpx = WarpX::GetInstance();
-    // const auto nLevel = warpx.finestLevel() + 1;
-    // // unsigned long np = 0;
-    // int np = 0;
-    // for(int lev = 0; lev < nLevel; lev++){
-    //     //np += static_cast<unsigned long> (m_valid_particles_level[lev]);
-    //     np += static_cast<int> (m_valid_particles_level[lev]);
-    // }
-
-    // //openPMD::Iteration currIteration = m_Series->writeIterations()[step + 1];
-
-    // openPMD::Iteration currIteration = m_Series.iterations[step+1];
-    // openPMD::ParticleSpecies currSpecies = currIteration.particles["species"];
-
-    // const std::shared_ptr<float> curr(
-    //     new float[np], [](float const *p) { 
-    //         delete[] p; 
-    //         p = nullptr;
-    //     }
-    // );
-    // openPMD::Datatype dtype = openPMD::determineDatatype(curr);
-    // auto d = openPMD::Dataset(dtype, {(uint64_t) np});
-    // // std::string options = "{}";
-    // // auto realType = openPMD::Dataset(openPMD::determineDatatype<amrex::ParticleReal>(), openPMD::Extent{np}); //, options);
-    // // auto idType = openPMD::Dataset(openPMD::determineDatatype<amrex::ParticleReal>(), openPMD::Extent{np}); //, options);
-
-    // std::vector<std::string> const positionComponents = {"x", "y", "z"};
-
-    // for(auto const& comp : positionComponents) {
-    //     currSpecies["position"][comp].resetDataset(d);
-    //     currSpecies["E"][comp].resetDataset(d);
-    //     currSpecies["B"][comp].resetDataset(d);
-    // }
-    // // auto const scalar = openPMD::RecordComponent::SCALAR;
-    // currSpecies["S"]["S"].resetDataset(d);
-    // currSpecies["id"]["id"].resetDataset(d);
-
-    // m_Series.flush();
-
-    // std::vector<std::string> const components = {"position", "E", "B", "S", "id"};
-    // for(int lev = 0; lev < nLevel; lev++){
-    //     for(int idx = 0; idx < components.size(); idx++){
-    //         if(idx < 3){
-    //             for (auto currDim = 0; currDim < 3; currDim++) {
-    //                 for (auto i = 0; i < static_cast<int> (np); i++) {
-    //                     int arg_offset = 1 + idx * 3 + currDim;
-    //                     curr.get()[i] = static_cast<float> (m_data_out_level[lev][i * noutputs + arg_offset]);
-    //                 }
-    //                 //unsigned long long offset = 0;
-    //                 uint64_t offset = 0;
-    //                 currSpecies[components[idx]][positionComponents[currDim]]
-    //                     .storeChunk(curr, openPMD::Offset{offset}, openPMD::Extent{(uint64_t) np});
-    //                 m_Series.flush();
-    //             }
-    //         }else{
-    //             for (int i = 0; i < static_cast<int> (np); i++) {
-    //                 int arg_offset;
-    //                 if(idx == 3){
-    //                     arg_offset = 10;
-    //                 }else{
-    //                     arg_offset = 0;
-    //                 }
-    //                 curr.get()[i] = static_cast<float> (m_data_out_level[lev][i * noutputs + arg_offset]);
-    //             }
-    //             // unsigned long long offset = 0;
-    //             uint64_t offset = 0;
-    //             currSpecies[components[idx]][components[idx]]
-    //                 .storeChunk(curr, openPMD::Offset{offset}, openPMD::Extent{(uint64_t) np});
-    //             m_Series.flush();
-    //         }
-    //     }
-    // }
-    // m_Series.flush();
-    // currIteration.close();
-    // m_Series.close();
-=======
-        ofs << "\n";
-    } // end loop over data size
-    // close file
-    ofs.close();
->>>>>>> upstream/development
 }

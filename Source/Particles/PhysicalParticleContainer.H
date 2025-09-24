@@ -455,14 +455,11 @@ protected:
     // A flag to enable saving of the previous timestep positions
     bool m_save_previous_position = false;
 
-<<<<<<< HEAD
     bool m_track_spin = false;
-=======
     // Flag controlling whether or not variance and then temperatures are computed per species
     bool m_do_temperature_deposition = false;
 
     std::unique_ptr<warpx::particles::deposition::VarianceAccumulationBuffer> local_temperature_arrays;
->>>>>>> upstream/development
 
 #ifdef WARPX_QED
     // A flag to enable quantum_synchrotron process for leptons
