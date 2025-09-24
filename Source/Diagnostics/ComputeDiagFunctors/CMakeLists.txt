@@ -5,6 +5,7 @@ foreach(D IN LISTS WarpX_DIMS)
         CellCenterFunctor.cpp
         DivBFunctor.cpp
         DivEFunctor.cpp
+        EBCoveredFunctor.cpp
         JFunctor.cpp
         JdispFunctor.cpp
         RhoFunctor.cpp
@@ -13,6 +14,7 @@ foreach(D IN LISTS WarpX_DIMS)
         BackTransformFunctor.cpp
         BackTransformParticleFunctor.cpp
         ParticleReductionFunctor.cpp
+        PhiFunctor.cpp
         TemperatureFunctor.cpp
     )
 endforeach()

@@ -11,6 +11,7 @@
 #include "SpectralFieldData_fwd.H"
 
 #include "SpectralKSpace.H"
+#include "Utils/WarpXAlgorithmSelection.H"
 #include "Utils/WarpX_Complex.H"
 
 #include <ablastr/math/fft/AnyFFT.H>
@@ -42,10 +43,10 @@ class SpectralFieldIndex
          *
          * \param[in] update_with_rho whether rho is used in the field update equations
          * \param[in] time_averaging  whether the time averaging algorithm is used
-         * \param[in] J_in_time       the multi-J algorithm used (hence two currents
+         * \param[in] time_dependency_J       the PSATD-JRhom algorithm used (hence two currents
          *                            computed at the beginning and the end of the time interval
          *                            instead of one current computed at half time)
-         * \param[in] rho_in_time     the multi-rho algorithm used (hence two densities
+         * \param[in] time_dependency_rho     the multi-rho algorithm used (hence two densities
          *                            computed at the beginning and the end of the time interval
          *                            instead of one density computed at half time)
          * \param[in] dive_cleaning   whether to use div(E) cleaning to account for errors in
@@ -59,8 +60,8 @@ class SpectralFieldIndex
          */
         SpectralFieldIndex (bool update_with_rho,
                             bool time_averaging,
-                            int J_in_time,
-                            int rho_in_time,
+                            TimeDependencyJ time_dependency_J,
+                            TimeDependencyRho time_dependency_rho,
                             bool dive_cleaning,
                             bool divb_cleaning,
                             bool pml,

@@ -7,14 +7,205 @@
 
 #include "WarpXFaceInfoBox.H"
 #include "EmbeddedBoundary/Enabled.H"
+#include "Fields.H"
 #include "Utils/TextMsg.H"
 #include "WarpX.H"
 
 #include <ablastr/warn_manager/WarnManager.H>
+#include <ablastr/fields/MultiFabRegister.H>
 
 #include <AMReX_Scan.H>
 #include <AMReX_iMultiFab.H>
 #include <AMReX_MultiFab.H>
+
+using namespace ablastr::fields;
+using warpx::fields::FieldType;
+
+namespace
+{
+
+#ifdef AMREX_USE_EB
+    /**
+    * \brief Auxiliary function to count the amount of faces which still need to be extended
+    */
+    amrex::Array1D<int, 0, 2>
+    CountExtFaces (
+        [[maybe_unused]] amrex::Vector<std::array< std::unique_ptr<amrex::iMultiFab>, 3 > >& flag_ext_face,
+        [[maybe_unused]] const int max_level)
+    {
+        amrex::Array1D<int, 0, 2> sums{0, 0, 0};
+
+        if (EB::enabled()) {
+#ifndef WARPX_DIM_RZ
+
+#ifdef WARPX_DIM_XZ
+            // In 2D we change the extrema of the for loop so that we only have the case idim=1
+            for(int idim = 1; idim < AMREX_SPACEDIM; ++idim) {
+#elif defined(WARPX_DIM_3D)
+            for(int idim = 0; idim < AMREX_SPACEDIM; ++idim) {
+#else
+                WARPX_ABORT_WITH_MESSAGE(
+                    "CountExtFaces: Only implemented in 2D3V and 3D3V");
+#endif
+                amrex::ReduceOps<amrex::ReduceOpSum> reduce_ops;
+                amrex::ReduceData<int> reduce_data(reduce_ops);
+                for (amrex::MFIter mfi(*flag_ext_face[max_level][idim]); mfi.isValid(); ++mfi) {
+                    amrex::Box const &box = mfi.validbox();
+                    auto const &r_flag_ext_face = flag_ext_face[max_level][idim]->array(mfi);
+                    reduce_ops.eval(box, reduce_data,
+                        [=] AMREX_GPU_DEVICE(int i, int j, int k) -> amrex::GpuTuple<int> {
+                            return r_flag_ext_face(i, j, k);
+                        });
+                }
+
+                auto r = reduce_data.value();
+                sums(idim) = amrex::get<0>(r);
+            }
+
+            amrex::ParallelDescriptor::ReduceIntSum(&(sums(0)), AMREX_SPACEDIM);
+#endif
+        }
+        return sums;
+    }
+
+#endif
+
+
+    /**
+    * \brief Compute the minimal area for stability for the face i, j, k with normal 'dim'.
+    *
+    * \tparam dim normal direction to the plane in consideration (0 for x, 1 for y, 2 for z)
+    *
+    * \param[in] i, j, k the indices of the cell
+    * \param[in] lx, ly, lz arrays containing the edge lengths
+    * \param[in] dx, dy, dz the mesh with in each direction
+    */
+    template <int dim>
+    [[nodiscard]]
+    AMREX_GPU_DEVICE AMREX_FORCE_INLINE
+    amrex::Real
+    ComputeSStab (const int i, const int j, const int k,
+                  const amrex::Array4<const amrex::Real> lx,
+                  const amrex::Array4<const amrex::Real> ly,
+                  const amrex::Array4<const amrex::Real> lz,
+                  const amrex::Real dx, const amrex::Real dy, const amrex::Real dz)
+    {
+
+        using namespace amrex::literals;
+
+        if constexpr (dim == 0) {
+            return 0.5_rt * std::max({ly(i, j, k) * dz, ly(i, j, k + 1) * dz,
+                                      lz(i, j, k) * dy, lz(i, j + 1, k) * dy});
+        }
+        else if constexpr (dim == 1)
+        {
+#ifdef WARPX_DIM_XZ
+            return 0.5_rt * std::max({lx(i, j, k) * dz, lx(i, j + 1, k) * dz,
+                                      lz(i, j, k) * dx, lz(i + 1, j, k) * dx});
+#elif defined(WARPX_DIM_3D)
+            return 0.5_rt * std::max({lx(i, j, k) * dz, lx(i, j, k + 1) * dz,
+                                      lz(i, j, k) * dx, lz(i + 1, j, k) * dx});
+#else
+            amrex::Abort("ComputeSStab: Only implemented in 2D3V and 3D3V");
+#endif
+        }
+        else if constexpr(dim == 2){
+            return 0.5_rt * std::max({lx(i, j, k) * dy, lx(i, j + 1, k) * dy,
+                                      ly(i, j, k) * dx, ly(i + 1, j, k) * dx});
+        }
+
+        amrex::Abort("ComputeSStab: dim must be 0, 1 or 2");
+
+        return -1;
+    }
+
+
+    /**
+    * \brief Compute the minimal area for stability for the face i, j, k with normal 'dim'.
+    * (wrapper to allow using ComputeSStab as a non-templated function, by passing 'dim' as an argument)
+    *
+    * \param[in] i, j, k the indices of the cell
+    * \param[in] lx, ly, lz arrays containing the edge lengths
+    * \param[in] dx, dy, dz the mesh with in each direction
+    * \param[in] dim normal direction to the plane in consideration (0 for x, 1 for y, 2 for z)
+    */
+   [[nodiscard]] [[maybe_unused]]
+    AMREX_GPU_DEVICE AMREX_FORCE_INLINE
+    amrex::Real
+    ComputeSStab (const int i, const int j, const int k,
+                  const amrex::Array4<const amrex::Real> lx,
+                  const amrex::Array4<const amrex::Real> ly,
+                  const amrex::Array4<const amrex::Real> lz,
+                  const amrex::Real dx, const amrex::Real dy, const amrex::Real dz,
+                  const int dim)
+    {
+        if (dim == 0) {
+            return ::ComputeSStab<0>(i,j,k,lx,ly,lz,dx,dy,dz);
+        }
+        else if (dim == 1) {
+            return ::ComputeSStab<1>(i,j,k,lx,ly,lz,dx,dy,dz);
+        }
+        else if (dim == 2) {
+            return ::ComputeSStab<2>(i,j,k,lx,ly,lz,dx,dy,dz);
+        }
+        return -1;
+    }
+
+
+    /**
+    * \brief Whenever an unstable cell cannot be extended we increase its area to be the minimal for stability.
+    *        This is the method Benkler-Chavannes-Kuster method and it is less accurate than the regular ECT but it
+    *        still works better than staircasing. (see https://ieeexplore.ieee.org/document/1638381)
+    *
+    * @tparam      idim Integer indicating the dimension (x->0, y->1, z->2) for which the BCK correction is done
+    *
+    * @param[in]      cell_size_max_lev The cell size at the maximum refinement level
+    * @param[in, out] all_fields The field manager
+    * @param[in]      flag_ext_face The extension flag used by the ECT solver
+    * @param[out]     flag_info_face The info flag used by the ECT solver
+    */
+    template <int idim>
+    void ApplyBCKCorrection (
+        const std::array<amrex::Real,3> &cell_size_max_lev,
+        ablastr::fields::MultiFabRegister& all_fields,
+        const int max_level,
+        const amrex::Vector<std::array< std::unique_ptr<amrex::iMultiFab>, 3 > >& flag_ext_face,
+        const amrex::Vector<std::array< std::unique_ptr<amrex::iMultiFab>, 3 > >& flag_info_face)
+    {
+        WARPX_ALWAYS_ASSERT_WITH_MESSAGE(EB::enabled(),
+            "ApplyBCKCorrection only works when EBs are enabled at runtime");
+
+#if defined(AMREX_USE_EB) and !defined(WARPX_DIM_RZ)
+
+        const amrex::Real dx = cell_size_max_lev[0];
+        const amrex::Real dy = cell_size_max_lev[1];
+        const amrex::Real dz = cell_size_max_lev[2];
+
+        for (amrex::MFIter mfi(*all_fields.get(FieldType::Bfield_fp, Direction{idim}, max_level), amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+
+            const amrex::Box &box = mfi.tilebox();
+            const amrex::Array4<int> &flag_ext_face_max_lev_idim = flag_ext_face[max_level][idim]->array(mfi);
+            const amrex::Array4<int> &flag_info_face_max_lev_idim = flag_info_face[max_level][idim]->array(mfi);
+            const amrex::Array4<amrex::Real> &S =  all_fields.get(FieldType::face_areas, Direction{idim}, max_level)->array(mfi);
+            const amrex::Array4<amrex::Real> &lx = all_fields.get(FieldType::face_areas, Direction{0}, max_level)->array(mfi);
+            const amrex::Array4<amrex::Real> &ly = all_fields.get(FieldType::face_areas, Direction{1}, max_level)->array(mfi);
+            const amrex::Array4<amrex::Real> &lz = all_fields.get(FieldType::face_areas, Direction{2}, max_level)->array(mfi);
+
+            amrex::ParallelFor(box, [=] AMREX_GPU_DEVICE(int i, int j, int k) {
+                if (flag_ext_face_max_lev_idim(i, j, k)) {
+                    // Modify the area according to the BCK algorithm
+                    S(i, j, k) = ::ComputeSStab<idim>(i, j, k, lx, ly, lz, dx, dy, dz);
+                    // Update the face info so that the solver doesn't think that this face is being extended
+                    flag_info_face_max_lev_idim(i, j, k) = -1;
+                }
+            });
+        }
+#else
+        amrex::ignore_unused(idim, cell_size_max_lev, all_fields, max_level, flag_ext_face, flag_info_face);
+#endif
+    }
+
+}
 
 /**
 * \brief Get the value of arr in the neighbor (i_n, j_n) on the plane with normal 'dim'.
@@ -120,87 +311,6 @@ SetNeigh(const amrex::Array4<T>& arr, const T val,
 }
 
 
-/**
-* \brief Compute the minimal area for stability for the face i, j, k with normal 'dim'.
-*
-* \param[in] i, j, k the indices of the cell
-* \param[in] lx, ly, lz arrays containing the edge lengths
-* \param[in] dx, dy, dz the mesh with in each direction
-* \param[in] dim normal direction to the plane in consideration (0 for x, 1 for y, 2 for z)
-*/
-AMREX_GPU_DEVICE AMREX_FORCE_INLINE
-amrex::Real
-ComputeSStab(const int i, const int j, const int k,
-             const amrex::Array4<const amrex::Real> lx,
-             const amrex::Array4<const amrex::Real> ly,
-             const amrex::Array4<const amrex::Real> lz,
-             const amrex::Real dx, const amrex::Real dy, const amrex::Real dz,
-             const int dim){
-
-    using namespace amrex::literals;
-
-    if(dim == 0) {
-        return 0.5_rt * std::max({ly(i, j, k) * dz, ly(i, j, k + 1) * dz,
-                                  lz(i, j, k) * dy, lz(i, j + 1, k) * dy});
-    }else if(dim == 1){
-#ifdef WARPX_DIM_XZ
-        return 0.5_rt * std::max({lx(i, j, k) * dz, lx(i, j + 1, k) * dz,
-                                  lz(i, j, k) * dx, lz(i + 1, j, k) * dx});
-#elif defined(WARPX_DIM_3D)
-        return 0.5_rt * std::max({lx(i, j, k) * dz, lx(i, j, k + 1) * dz,
-                                  lz(i, j, k) * dx, lz(i + 1, j, k) * dx});
-#else
-        amrex::Abort("ComputeSStab: Only implemented in 2D3V and 3D3V");
-#endif
-    }else if(dim == 2){
-        return 0.5_rt * std::max({lx(i, j, k) * dy, lx(i, j + 1, k) * dy,
-                                  ly(i, j, k) * dx, ly(i + 1, j, k) * dx});
-    }
-
-    amrex::Abort("ComputeSStab: dim must be 0, 1 or 2");
-
-    return -1;
-}
-
-
-amrex::Array1D<int, 0, 2>
-WarpX::CountExtFaces () {
-    amrex::Array1D<int, 0, 2> sums{0, 0, 0};
-#ifdef AMREX_USE_EB
-    if (EB::enabled()) {
-#ifndef WARPX_DIM_RZ
-
-#ifdef WARPX_DIM_XZ
-        // In 2D we change the extrema of the for loop so that we only have the case idim=1
-        for(int idim = 1; idim < AMREX_SPACEDIM; ++idim) {
-#elif defined(WARPX_DIM_3D)
-        for(int idim = 0; idim < AMREX_SPACEDIM; ++idim) {
-#else
-            WARPX_ABORT_WITH_MESSAGE(
-                "CountExtFaces: Only implemented in 2D3V and 3D3V");
-#endif
-            amrex::ReduceOps<amrex::ReduceOpSum> reduce_ops;
-            amrex::ReduceData<int> reduce_data(reduce_ops);
-            for (amrex::MFIter mfi(*m_flag_ext_face[maxLevel()][idim]); mfi.isValid(); ++mfi) {
-                amrex::Box const &box = mfi.validbox();
-                auto const &flag_ext_face = m_flag_ext_face[maxLevel()][idim]->array(mfi);
-                reduce_ops.eval(box, reduce_data,
-                    [=] AMREX_GPU_DEVICE(int i, int j, int k) -> amrex::GpuTuple<int> {
-                        return flag_ext_face(i, j, k);
-                    });
-            }
-
-            auto r = reduce_data.value();
-            sums(idim) = amrex::get<0>(r);
-        }
-
-        amrex::ParallelDescriptor::ReduceIntSum(&(sums(0)), AMREX_SPACEDIM);
-#endif
-    }
-#endif
-    return sums;
-}
-
 void
 WarpX::ComputeFaceExtensions ()
 {
@@ -208,7 +318,7 @@ WarpX::ComputeFaceExtensions ()
         throw std::runtime_error("ComputeFaceExtensions only works when EBs are enabled at runtime");
     }
 #ifdef AMREX_USE_EB
-    amrex::Array1D<int, 0, 2> N_ext_faces = CountExtFaces();
+    amrex::Array1D<int, 0, 2> N_ext_faces = ::CountExtFaces(m_flag_ext_face, maxLevel());
     ablastr::warn_manager::WMRecordWarning("Embedded Boundary",
             "Faces to be extended in x:\t" + std::to_string(N_ext_faces(0)) + "\n"
             +"Faces to be extended in y:\t" + std::to_string(N_ext_faces(1)) + "\n"
@@ -219,7 +329,7 @@ WarpX::ComputeFaceExtensions ()
     InitBorrowing();
     ComputeOneWayExtensions();
 
-    amrex::Array1D<int, 0, 2> N_ext_faces_after_one_way = CountExtFaces();
+    amrex::Array1D<int, 0, 2> N_ext_faces_after_one_way = ::CountExtFaces(m_flag_ext_face, maxLevel());
     ablastr::warn_manager::WMRecordWarning("Embedded Boundary",
             "Faces to be extended after one way extension in x:\t"
             + std::to_string(N_ext_faces_after_one_way(0)) + "\n"
@@ -233,7 +343,7 @@ WarpX::ComputeFaceExtensions ()
     ComputeEightWaysExtensions();
     ShrinkBorrowing();
 
-    amrex::Array1D<int, 0, 2> N_ext_faces_after_eight_ways = CountExtFaces();
+    amrex::Array1D<int, 0, 2> N_ext_faces_after_eight_ways = ::CountExtFaces(m_flag_ext_face, maxLevel());
     ablastr::warn_manager::WMRecordWarning("Embedded Boundary",
             "Faces to be extended after eight ways extension in x:\t"
             + std::to_string(N_ext_faces_after_eight_ways(0)) + "\n"
@@ -249,19 +359,25 @@ WarpX::ComputeFaceExtensions ()
     // If any cell could not be extended we use the BCK method to stabilize them
 #if !defined(WARPX_DIM_XZ) && !defined(WARPX_DIM_RZ)
     if (N_ext_faces_after_eight_ways(0) > 0) {
-        ApplyBCKCorrection(0);
+        ::ApplyBCKCorrection<0>(
+            CellSize(maxLevel()), m_fields, maxLevel(),
+            m_flag_ext_face, m_flag_info_face);
         using_bck = true;
     }
 #endif
 
     if (N_ext_faces_after_eight_ways(1) > 0) {
-        ApplyBCKCorrection(1);
+        ::ApplyBCKCorrection<1>(
+            CellSize(maxLevel()), m_fields, maxLevel(),
+            m_flag_ext_face, m_flag_info_face);
         using_bck = true;
     }
 
 #if !defined(WARPX_DIM_XZ) && !defined(WARPX_DIM_RZ)
     if (N_ext_faces_after_eight_ways(2) > 0) {
-        ApplyBCKCorrection(2);
+        ::ApplyBCKCorrection<2>(
+            CellSize(maxLevel()), m_fields, maxLevel(),
+            m_flag_ext_face, m_flag_info_face);
         using_bck = true;
     }
 #endif
@@ -282,8 +398,9 @@ WarpX::ComputeFaceExtensions ()
 
 void
 WarpX::InitBorrowing() {
+    using ablastr::fields::Direction;
     int idim = 0;
-    for (amrex::MFIter mfi(*Bfield_fp[maxLevel()][idim]); mfi.isValid(); ++mfi) {
+    for (amrex::MFIter mfi(*m_fields.get(FieldType::Bfield_fp, Direction{idim}, maxLevel())); mfi.isValid(); ++mfi) {
         amrex::Box const &box = mfi.validbox();
         auto &borrowing_x = (*m_borrowing[maxLevel()][idim])[mfi];
         borrowing_x.inds_pointer.resize(box);
@@ -299,7 +416,7 @@ WarpX::InitBorrowing() {
     }
 
     idim = 1;
-    for (amrex::MFIter mfi(*Bfield_fp[maxLevel()][idim]); mfi.isValid(); ++mfi) {
+    for (amrex::MFIter mfi(*m_fields.get(FieldType::Bfield_fp, Direction{idim}, maxLevel())); mfi.isValid(); ++mfi) {
         amrex::Box const &box = mfi.validbox();
         auto &borrowing_y = (*m_borrowing[maxLevel()][idim])[mfi];
         borrowing_y.inds_pointer.resize(box);
@@ -312,7 +429,7 @@ WarpX::InitBorrowing() {
     }
 
     idim = 2;
-    for (amrex::MFIter mfi(*Bfield_fp[maxLevel()][idim]); mfi.isValid(); ++mfi) {
+    for (amrex::MFIter mfi(*m_fields.get(FieldType::Bfield_fp, Direction{idim}, maxLevel())); mfi.isValid(); ++mfi) {
         amrex::Box const &box = mfi.validbox();
         auto &borrowing_z = (*m_borrowing[maxLevel()][idim])[mfi];
         borrowing_z.inds_pointer.resize(box);
@@ -434,6 +551,7 @@ WarpX::ComputeOneWayExtensions ()
         throw std::runtime_error("ComputeOneWayExtensions only works when EBs are enabled at runtime");
     }
 #ifdef AMREX_USE_EB
+    using ablastr::fields::Direction;
 #ifndef WARPX_DIM_RZ
     auto const eb_fact = fieldEBFactory(maxLevel());
 
@@ -453,11 +571,10 @@ WarpX::ComputeOneWayExtensions ()
         WARPX_ABORT_WITH_MESSAGE(
             "ComputeOneWayExtensions: Only implemented in 2D3V and 3D3V");
 #endif
-        for (amrex::MFIter mfi(*Bfield_fp[maxLevel()][idim]); mfi.isValid(); ++mfi) {
+        for (amrex::MFIter mfi(*m_fields.get(FieldType::Bfield_fp, Direction{idim}, maxLevel())); mfi.isValid(); ++mfi) {
 
             amrex::Box const &box = mfi.validbox();
-
-            auto const &S = m_face_areas[maxLevel()][idim]->array(mfi);
+            auto const &S = m_fields.get(FieldType::face_areas, Direction{idim}, maxLevel())->array(mfi);
             auto const &flag_ext_face = m_flag_ext_face[maxLevel()][idim]->array(mfi);
             auto const &flag_info_face = m_flag_info_face[maxLevel()][idim]->array(mfi);
             auto &borrowing = (*m_borrowing[maxLevel()][idim])[mfi];
@@ -469,11 +586,11 @@ WarpX::ComputeOneWayExtensions ()
             amrex::Real* borrowing_area = borrowing.area.data();
             int& vecs_size = borrowing.vecs_size;
 
-            auto const &S_mod = m_area_mod[maxLevel()][idim]->array(mfi);
+            auto const &S_mod = m_fields.get(FieldType::area_mod, Direction{idim}, maxLevel())->array(mfi);
 
-            const auto &lx = m_edge_lengths[maxLevel()][0]->array(mfi);
-            const auto &ly = m_edge_lengths[maxLevel()][1]->array(mfi);
-            const auto &lz = m_edge_lengths[maxLevel()][2]->array(mfi);
+            const auto &lx = m_fields.get(FieldType::edge_lengths, Direction{0}, maxLevel())->array(mfi);
+            const auto &ly = m_fields.get(FieldType::edge_lengths, Direction{1}, maxLevel())->array(mfi);
+            const auto &lz = m_fields.get(FieldType::edge_lengths, Direction{2}, maxLevel())->array(mfi);
 
             vecs_size = amrex::Scan::PrefixSum<int>(ncells,
                                                     [=] AMREX_GPU_DEVICE (int icell) {
@@ -486,7 +603,7 @@ WarpX::ComputeOneWayExtensions ()
                     return 0;
                 }
 
-                const amrex::Real S_stab = ComputeSStab(i, j, k, lx, ly, lz, dx, dy, dz, idim);
+                const amrex::Real S_stab = ::ComputeSStab(i, j, k, lx, ly, lz, dx, dy, dz, idim);
 
                 const amrex::Real S_ext = S_stab - S(i, j, k);
                 const int n_borrow =
@@ -508,7 +625,7 @@ WarpX::ComputeOneWayExtensions ()
                 } else{
                     borrowing_inds_pointer(i, j, k) = borrowing_inds + ps;
 
-                    const amrex::Real S_stab = ComputeSStab(i, j, k, lx, ly, lz, dx, dy, dz, idim);
+                    const amrex::Real S_stab = ::ComputeSStab(i, j, k, lx, ly, lz, dx, dy, dz, idim);
 
                     const amrex::Real S_ext = S_stab - S(i, j, k);
                     for (int i_n = -1; i_n < 2; i_n++) {
@@ -563,6 +680,7 @@ WarpX::ComputeEightWaysExtensions ()
     }
 #ifdef AMREX_USE_EB
     using namespace amrex::literals;
+    using ablastr::fields::Direction;
 
 #ifndef WARPX_DIM_RZ
     auto const &cell_size = CellSize(maxLevel());
@@ -581,11 +699,11 @@ WarpX::ComputeEightWaysExtensions ()
         WARPX_ABORT_WITH_MESSAGE(
             "ComputeEightWaysExtensions: Only implemented in 2D3V and 3D3V");
 #endif
-        for (amrex::MFIter mfi(*Bfield_fp[maxLevel()][idim]); mfi.isValid(); ++mfi) {
+        for (amrex::MFIter mfi(*m_fields.get(FieldType::Bfield_fp, Direction{idim}, maxLevel())); mfi.isValid(); ++mfi) {
 
             amrex::Box const &box = mfi.validbox();
 
-            auto const &S = m_face_areas[maxLevel()][idim]->array(mfi);
+            auto const &S = m_fields.get(FieldType::face_areas, Direction{idim}, maxLevel())->array(mfi);
             auto const &flag_ext_face = m_flag_ext_face[maxLevel()][idim]->array(mfi);
             auto const &flag_info_face = m_flag_info_face[maxLevel()][idim]->array(mfi);
             auto &borrowing = (*m_borrowing[maxLevel()][idim])[mfi];
@@ -597,10 +715,11 @@ WarpX::ComputeEightWaysExtensions ()
             amrex::Real* borrowing_area = borrowing.area.data();
             int& vecs_size = borrowing.vecs_size;
 
-            auto const &S_mod = m_area_mod[maxLevel()][idim]->array(mfi);
-            const auto &lx = m_edge_lengths[maxLevel()][0]->array(mfi);
-            const auto &ly = m_edge_lengths[maxLevel()][1]->array(mfi);
-            const auto &lz = m_edge_lengths[maxLevel()][2]->array(mfi);
+            auto const &S_mod = m_fields.get(FieldType::area_mod, Direction{idim}, maxLevel())->array(mfi);
+
+            const auto &lx = m_fields.get(FieldType::edge_lengths, Direction{0}, maxLevel())->array(mfi);
+            const auto &ly = m_fields.get(FieldType::edge_lengths, Direction{1}, maxLevel())->array(mfi);
+            const auto &lz = m_fields.get(FieldType::edge_lengths, Direction{2}, maxLevel())->array(mfi);
 
             vecs_size += amrex::Scan::PrefixSum<int>(ncells,
                                                      [=] AMREX_GPU_DEVICE (int icell){
@@ -612,7 +731,7 @@ WarpX::ComputeEightWaysExtensions ()
                 if (!flag_ext_face(i, j, k)) {
                     return 0;
                 }
-                const amrex::Real S_stab = ComputeSStab(i, j, k, lx, ly, lz, dx, dy, dz, idim);
+                const amrex::Real S_stab = ::ComputeSStab(i, j, k, lx, ly, lz, dx, dy, dz, idim);
 
                 const amrex::Real S_ext = S_stab - S(i, j, k);
                 const int n_borrow = ComputeNBorrowEightFacesExtension(cell, S_ext, S_mod, S,
@@ -641,7 +760,7 @@ WarpX::ComputeEightWaysExtensions ()
                     borrowing_inds_pointer(i, j, k) = borrowing_inds + ps;
 
                     S_mod(i, j, k) = S(i, j, k);
-                    const amrex::Real S_stab = ComputeSStab(i, j, k, lx, ly, lz, dx, dy, dz, idim);
+                    const amrex::Real S_stab = ::ComputeSStab(i, j, k, lx, ly, lz, dx, dy, dz, idim);
 
                     const amrex::Real S_ext = S_stab - S(i, j, k);
                     amrex::Array2D<amrex::Real, 0, 2, 0, 2> local_avail{};
@@ -720,47 +839,12 @@ WarpX::ComputeEightWaysExtensions ()
 }
 
 void
-WarpX::ApplyBCKCorrection (const int idim)
-{
-    if (!EB::enabled()) {
-        throw std::runtime_error("ApplyBCKCorrection only works when EBs are enabled at runtime");
-    }
-#if defined(AMREX_USE_EB) and !defined(WARPX_DIM_RZ)
-    const std::array<amrex::Real,3> &cell_size = CellSize(maxLevel());
-
-    const amrex::Real dx = cell_size[0];
-    const amrex::Real dy = cell_size[1];
-    const amrex::Real dz = cell_size[2];
-
-    for (amrex::MFIter mfi(*Bfield_fp[maxLevel()][idim], amrex::TilingIfNotGPU()); mfi.isValid(); ++mfi) {
-
-        const amrex::Box &box = mfi.tilebox();
-        const amrex::Array4<int> &flag_ext_face = m_flag_ext_face[maxLevel()][idim]->array(mfi);
-        const amrex::Array4<int> &flag_info_face = m_flag_info_face[maxLevel()][idim]->array(mfi);
-        const amrex::Array4<amrex::Real> &S = m_face_areas[maxLevel()][idim]->array(mfi);
-        const amrex::Array4<amrex::Real> &lx = m_face_areas[maxLevel()][0]->array(mfi);
-        const amrex::Array4<amrex::Real> &ly = m_face_areas[maxLevel()][1]->array(mfi);
-        const amrex::Array4<amrex::Real> &lz = m_face_areas[maxLevel()][2]->array(mfi);
-
-        amrex::ParallelFor(box, [=] AMREX_GPU_DEVICE(int i, int j, int k) {
-            if (flag_ext_face(i, j, k)) {
-                // Modify the area according to the BCK algorithm
-                S(i, j, k) = ComputeSStab(i, j, k, lx, ly, lz, dx, dy, dz, idim);
-                // Update the face info so that the solver doesn't think that this face is being extended
-                flag_info_face(i, j, k) = -1;
-            }
-        });
-    }
-#else
-    amrex::ignore_unused(idim);
-#endif
-}
-
-void
 WarpX::ShrinkBorrowing ()
 {
+    using ablastr::fields::Direction;
+
     for(int idim = 0; idim < AMREX_SPACEDIM; idim++) {
-        for (amrex::MFIter mfi(*Bfield_fp[maxLevel()][idim]); mfi.isValid(); ++mfi) {
+        for (amrex::MFIter mfi(*m_fields.get(FieldType::Bfield_fp, Direction{idim}, maxLevel())); mfi.isValid(); ++mfi) {
             auto &borrowing = (*m_borrowing[maxLevel()][idim])[mfi];
             borrowing.inds.resize(borrowing.vecs_size);
             borrowing.neigh_faces.resize(borrowing.vecs_size);

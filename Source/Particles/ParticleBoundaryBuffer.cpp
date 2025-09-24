@@ -50,11 +50,11 @@ struct IsOutsideDomainBoundary {
 };
 
 struct FindEmbeddedBoundaryIntersection {
-    const int m_step_index;
-    const int m_delta_index;
-    const int m_normal_index;
-    const int m_step;
-    const amrex::Real m_dt;
+    int m_step_index;
+    int m_delta_index;
+    int m_normal_index;
+    int m_step;
+    amrex::Real m_dt;
     amrex::Array4<const amrex::Real> m_phiarr;
     amrex::GpuArray<amrex::Real, AMREX_SPACEDIM> m_dxi;
     amrex::GpuArray<amrex::Real, AMREX_SPACEDIM> m_plo;
@@ -159,6 +159,13 @@ struct FindEmbeddedBoundaryIntersection {
         dst.m_runtime_rdata[m_normal_index][dst_i] = 0.0;
         dst.m_runtime_rdata[m_normal_index+1][dst_i] = 0.0;
         dst.m_runtime_rdata[m_normal_index+2][dst_i] = 0.0;
+#elif (defined WARPX_DIM_RCYLINDER) || (defined WARPX_DIM_RSPHERE)
+        dst.m_rdata[PIdx::x][dst_i] = x_temp;
+        amrex::ignore_unused(y_temp, z_temp);
+        //normal not defined
+        dst.m_runtime_rdata[m_normal_index][dst_i] = 0.0;
+        dst.m_runtime_rdata[m_normal_index+1][dst_i] = 0.0;
+        dst.m_runtime_rdata[m_normal_index+2][dst_i] = 0.0;
 #else
         amrex::ignore_unused(x_temp, y_temp, z_temp,normal);
 #endif
@@ -173,7 +180,7 @@ struct CopyAndTimestamp {
     int m_delta_index;
     int m_normal_index;
     int m_step;
-    const amrex::Real m_dt;
+    amrex::Real m_dt;
     int m_idim;
     int m_iside;
 
@@ -226,6 +233,9 @@ ParticleBoundaryBuffer::ParticleBoundaryBuffer ()
 #if defined(WARPX_DIM_1D_Z)
     constexpr auto idx_zlo = 0;
     constexpr auto idx_zhi = 1;
+#elif (defined WARPX_DIM_RCYLINDER) || (defined WARPX_DIM_RSPHERE)
+    constexpr auto idx_xlo = 0;
+    constexpr auto idx_xhi = 1;
 #elif defined(WARPX_DIM_XZ) || defined(WARPX_DIM_RZ)
     constexpr auto idx_xlo = 0;
     constexpr auto idx_xhi = 1;
@@ -248,6 +258,9 @@ ParticleBoundaryBuffer::ParticleBoundaryBuffer ()
 #if defined(WARPX_DIM_1D_Z)
         pp_species.query("save_particles_at_zlo", m_do_boundary_buffer[idx_zlo][ispecies]);
         pp_species.query("save_particles_at_zhi", m_do_boundary_buffer[idx_zhi][ispecies]);
+#elif (defined WARPX_DIM_RCYLINDER) || (defined WARPX_DIM_RSPHERE)
+        pp_species.query("save_particles_at_xlo", m_do_boundary_buffer[idx_xlo][ispecies]);
+        pp_species.query("save_particles_at_xhi", m_do_boundary_buffer[idx_xhi][ispecies]);
 #elif defined(WARPX_DIM_XZ) || defined(WARPX_DIM_RZ)
         pp_species.query("save_particles_at_xlo", m_do_boundary_buffer[idx_xlo][ispecies]);
         pp_species.query("save_particles_at_xhi", m_do_boundary_buffer[idx_xhi][ispecies]);
@@ -273,6 +286,9 @@ ParticleBoundaryBuffer::ParticleBoundaryBuffer ()
 #if defined(WARPX_DIM_1D_Z)
     m_boundary_names[idx_zlo] = "zlo";
     m_boundary_names[idx_zhi] = "zhi";
+#elif (defined WARPX_DIM_RCYLINDER) || (defined WARPX_DIM_RSPHERE)
+    m_boundary_names[idx_xlo] = "xlo";
+    m_boundary_names[idx_xhi] = "xhi";
 #elif defined(WARPX_DIM_XZ) || defined(WARPX_DIM_RZ)
     m_boundary_names[idx_xlo] = "xlo";
     m_boundary_names[idx_xhi] = "xhi";
@@ -384,11 +400,11 @@ void ParticleBoundaryBuffer::gatherParticlesFromDomainBoundaries (MultiParticleC
                 if (!buffer[i].isDefined())
                 {
                     buffer[i] = pc.make_alike<amrex::PinnedArenaAllocator>();
-                    buffer[i].AddIntComp("stepScraped", false);
-                    buffer[i].AddRealComp("deltaTimeScraped", false);
-                    buffer[i].AddRealComp("nx", false);
-                    buffer[i].AddRealComp("ny", false);
-                    buffer[i].AddRealComp("nz", false);
+                    buffer[i].AddIntComp("stepScraped", true);
+                    buffer[i].AddRealComp("deltaTimeScraped", true);
+                    buffer[i].AddRealComp("nx", true);
+                    buffer[i].AddRealComp("ny", true);
+                    buffer[i].AddRealComp("nz", true);
                 }
 
                 auto& species_buffer = buffer[i];
@@ -429,7 +445,11 @@ void ParticleBoundaryBuffer::gatherParticlesFromDomainBoundaries (MultiParticleC
                         amrex::ReduceData<int> reduce_data(reduce_op);
                         {
                           WARPX_PROFILE("ParticleBoundaryBuffer::gatherParticles::count_out_of_bounds");
+#ifdef AMREX_USE_GPU
+                          const amrex::RandomEngine rng{nullptr};
+#else
                           const amrex::RandomEngine rng{};
+#endif
                           reduce_op.eval(np, reduce_data, [=] AMREX_GPU_HOST_DEVICE (int ip)
                                          { return predicate(ptile_data, ip, rng) ? 1 : 0; });
                         }
@@ -443,11 +463,10 @@ void ParticleBoundaryBuffer::gatherParticlesFromDomainBoundaries (MultiParticleC
                           WARPX_PROFILE("ParticleBoundaryBuffer::gatherParticles::filterAndTransform");
                           auto& warpx = WarpX::GetInstance();
                           const auto dt = warpx.getdt(pti.GetLevel());
-                          auto string_to_index_intcomp = buffer[i].getParticleRuntimeiComps();
-                          const int step_scraped_index = string_to_index_intcomp.at("stepScraped");
-                          auto string_to_index_realcomp = buffer[i].getParticleRuntimeComps();
-                          const int delta_index = string_to_index_realcomp.at("deltaTimeScraped");
-                          const int normal_index = string_to_index_realcomp.at("nx");
+                          auto & buf = buffer[i];
+                          const int step_scraped_index = buf.GetIntCompIndex("stepScraped") - PinnedMemoryParticleContainer::NArrayInt;
+                          const int delta_index = buf.GetRealCompIndex("deltaTimeScraped") - PinnedMemoryParticleContainer::NArrayReal;
+                          const int normal_index = buf.GetRealCompIndex("nx") - PinnedMemoryParticleContainer::NArrayReal;
                           const int step = warpx_instance.getistep(0);
                           amrex::filterAndTransformParticles(ptile_buffer, ptile,
                                                              predicate,
@@ -462,7 +481,7 @@ void ParticleBoundaryBuffer::gatherParticlesFromDomainBoundaries (MultiParticleC
 }
 
 void ParticleBoundaryBuffer::gatherParticlesFromEmbeddedBoundaries (
-    MultiParticleContainer& mypc, const amrex::Vector<const amrex::MultiFab*>& distance_to_eb)
+    MultiParticleContainer& mypc, ablastr::fields::MultiLevelScalarField const& distance_to_eb)
 {
     if (EB::enabled()) {
         WARPX_PROFILE("ParticleBoundaryBuffer::gatherParticles::EB");
@@ -481,11 +500,11 @@ void ParticleBoundaryBuffer::gatherParticlesFromEmbeddedBoundaries (
             if (!buffer[i].isDefined())
             {
                 buffer[i] = pc.make_alike<amrex::PinnedArenaAllocator>();
-                buffer[i].AddIntComp("stepScraped", false);
-                buffer[i].AddRealComp("deltaTimeScraped", false);
-                buffer[i].AddRealComp("nx", false);
-                buffer[i].AddRealComp("ny", false);
-                buffer[i].AddRealComp("nz", false);
+                buffer[i].AddIntComp("stepScraped", true);
+                buffer[i].AddRealComp("deltaTimeScraped", true);
+                buffer[i].AddRealComp("nx", true);
+                buffer[i].AddRealComp("ny", true);
+                buffer[i].AddRealComp("nz", true);
 
             }
 
@@ -546,11 +565,10 @@ void ParticleBoundaryBuffer::gatherParticlesFromEmbeddedBoundaries (
                     }
                     auto &warpx = WarpX::GetInstance();
                     const auto dt = warpx.getdt(pti.GetLevel());
-                    auto string_to_index_intcomp = buffer[i].getParticleRuntimeiComps();
-                    const int step_scraped_index = string_to_index_intcomp.at("stepScraped");
-                    auto string_to_index_realcomp = buffer[i].getParticleRuntimeComps();
-                    const int delta_index = string_to_index_realcomp.at("deltaTimeScraped");
-                    const int normal_index = string_to_index_realcomp.at("nx");
+                    auto & buf = buffer[i];
+                    const int step_scraped_index = buf.GetIntCompIndex("stepScraped") - PinnedMemoryParticleContainer::NArrayInt;
+                    const int delta_index = buf.GetRealCompIndex("deltaTimeScraped") - PinnedMemoryParticleContainer::NArrayReal;
+                    const int normal_index = buf.GetRealCompIndex("nx") - PinnedMemoryParticleContainer::NArrayReal;
                     const int step = warpx_instance.getistep(0);
 
                     {

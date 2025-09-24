@@ -11,7 +11,9 @@
 
 #include "SpectralAlgorithms/SpectralBaseAlgorithm.H"
 #include "SpectralFieldData.H"
+#include "Utils/WarpXAlgorithmSelection.H"
 
+#include <ablastr/fields/MultiFabRegister.H>
 #include <ablastr/utils/Enums.H>
 
 #include <AMReX_Array.H>
@@ -62,9 +64,9 @@ class SpectralSolver
          * \param[in] fft_do_time_averaging whether the time averaging algorithm is used
          * \param[in] psatd_solution_type whether the PSATD equations are derived
          *                                from a first-order or second-order model
-         * \param[in] J_in_time integer that corresponds to the time dependency of J
+         * \param[in] time_dependency_J integer that corresponds to the time dependency of J
          *                      (constant, linear) for the PSATD algorithm
-         * \param[in] rho_in_time integer that corresponds to the time dependency of rho
+         * \param[in] time_dependency_rho integer that corresponds to the time dependency of rho
          *                        (linear, quadratic) for the PSATD algorithm
          * \param[in] dive_cleaning whether to use div(E) cleaning to account for errors in
          *                          Gauss law (new field F in the update equations)
@@ -86,9 +88,9 @@ class SpectralSolver
                         bool periodic_single_box,
                         bool update_with_rho,
                         bool fft_do_time_averaging,
-                        int psatd_solution_type,
-                        int J_in_time,
-                        int rho_in_time,
+                        PSATDSolutionType psatd_solution_type,
+                        TimeDependencyJ time_dependency_J,
+                        TimeDependencyRho time_dependency_rho,
                         bool dive_cleaning,
                         bool divb_cleaning);
 
@@ -125,9 +127,12 @@ class SpectralSolver
           * \brief Public interface to call the member function ComputeSpectralDivE
           * of the base class SpectralBaseAlgorithm from objects of class SpectralSolver
           */
-        void ComputeSpectralDivE ( int lev,
-                                   const std::array<std::unique_ptr<amrex::MultiFab>,3>& Efield,
-                                   amrex::MultiFab& divE ) {
+        void ComputeSpectralDivE (
+            int lev,
+            ablastr::fields::VectorField const & Efield,
+            amrex::MultiFab& divE
+        )
+        {
             algorithm->ComputeSpectralDivE( lev, field_data, Efield, divE );
         }
 
@@ -192,6 +197,9 @@ class SpectralSolver
         }
 
         SpectralFieldIndex m_spectral_index;
+
+        // Solve time step size
+        amrex::Real m_dt;
 
     protected:
 
