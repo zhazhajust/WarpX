@@ -1,2 +1,1 @@
 add_subdirectory(LaserProfilesImpl)
-add_subdirectory(LibFlyfocs)

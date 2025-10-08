@@ -2257,6 +2257,34 @@ class FlyfocLaser(_ClassWithInit):
 
     name: string, optional
         Optional name of the laser
+
+    focal_type: string, optional
+        Type of focal trajectory, either "math" or "linear"
+        If None, no fly-focusing is applied.
+    
+    focal_spot: string, optional
+        If focal_type is "math", this specifies the mathematical function
+        that describes the focal spot trajectory. It must be a function of time `i`.
+        Examples include "0.5*sin(2*pi*1e12*i)" or "0.5*i".
+        If None, no fly-focusing is applied.
+    
+    focal_delay: string, optional
+        If focal_type is "math", this specifies the mathematical function
+        that describes the focal delay. It must be a function of time `i`.
+        Examples include "1e-12*sin(2*pi*1e12*i)" or "1e-12*i".
+        If None, no fly-focusing is applied.
+    
+    focal_weight: string, optional
+        If focal_type is "math", this specifies the mathematical function
+        that describes the focal weight. It must be a function of time `i`.
+        Examples include "0.5*sin(2*pi*1e12*i)" or "0.5*i".
+        If None, no fly-focusing is applied.
+
+    focal_phase: string, optional
+        If focal_type is "math", this specifies the mathematical function
+        that describes the focal phase. It must be a function of time `i`.
+        Examples include "0.5*sin(2*pi*1e12*i)" or "0.5*i".
+        If None, no fly-focusing is applied.
     """
     def __init__(self, wavelength, waist, duration,
                  propagation_direction,
