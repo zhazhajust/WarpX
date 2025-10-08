@@ -486,13 +486,14 @@ void FieldProbe::ComputeDiags (int step)
                 {
                     y_probe += move_dist;
                 }
+#if defined(WARPX_ZINDEX)
                 if (temp_warpx_moving_window == WARPX_ZINDEX)
                 {
                     z_probe += move_dist;
                 }
             }
         }
-
+#endif
         // get MultiFab data at lev
         const amrex::MultiFab &Ex = *warpx.m_fields.get(FieldType::Efield_aux, Direction{0}, lev);
         const amrex::MultiFab &Ey = *warpx.m_fields.get(FieldType::Efield_aux, Direction{1}, lev);

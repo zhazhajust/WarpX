@@ -18,6 +18,7 @@ import periodictable
 import picmistandard
 import pywarpx
 import pywarpx.callbacks
+from picmistandard.base import _ClassWithInit
 
 codename = "warpx"
 picmistandard.register_codename(codename)
