@@ -71,7 +71,7 @@ set(WarpX_pyamrex_src ""
 
 # Git fetcher
 option(WarpX_pyamrex_internal "Download & build pyAMReX" ON)
-set(WarpX_pyamrex_repo "git@github.com:AMReX-Codes/pyamrex.git"
+set(WarpX_pyamrex_repo "https://github.com/AMReX-Codes/pyamrex.git"
     CACHE STRING
     "Repository URI to pull and build pyamrex from if(WarpX_pyamrex_internal)")
 
