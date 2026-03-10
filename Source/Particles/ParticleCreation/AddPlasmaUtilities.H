@@ -338,4 +338,9 @@ struct QEDHelper
 };
 #endif
 
+struct SpinHelper
+{
+    
+}
+
 #endif /*WARPX_ADDPLASMAUTILITIES_H_*/
