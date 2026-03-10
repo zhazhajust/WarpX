@@ -195,6 +195,18 @@ class Species(picmistandard.PICMI_Species):
     warpx_do_temperature_deposition: bool, default=False
         This flag is set per species to do another pass to deposit temperature
         on each timestep if required. Currently only works with Ohm's Law Hybrid Solver.
+
+    warpx_track_spin: bool, default=False
+        Whether or not to track particle spin.
+
+    warpx_spin_init_x: float, default=0.0
+        Initial x component of the particle spin.
+    
+    warpx_spin_init_y: float, default=0.0
+        Initial y component of the particle spin.
+
+    warpx_spin_init_z: float, default=1.0
+        Initial z component of the particle spin.
     """
 
     def init(self, kw):
@@ -329,6 +341,11 @@ class Species(picmistandard.PICMI_Species):
 
         self.do_temperature_deposition = kw.pop("warpx_do_temperature_deposition", None)
 
+        self.track_spin = kw.pop("warpx_track_spin", False)
+        self.spin_init_x = kw.pop("warpx_spin_init_x", 0.0)
+        self.spin_init_y = kw.pop("warpx_spin_init_y", 0.0)
+        self.spin_init_z = kw.pop("warpx_spin_init_z", 1.0)
+
     def species_initialize_inputs(
         self,
         layout,
@@ -382,6 +399,10 @@ class Species(picmistandard.PICMI_Species):
             resampling_algorithm_n_phi=self.resampling_algorithm_n_phi,
             resampling_algorithm_delta_u=self.resampling_algorithm_delta_u,
             do_temperature_deposition=self.do_temperature_deposition,
+            track_spin=self.track_spin,
+            spin_init_x=self.spin_init_x,
+            spin_init_y=self.spin_init_y,
+            spin_init_z=self.spin_init_z,
         )
 
         # add reflection models
@@ -4115,6 +4136,10 @@ class ParticleDiagnostic(picmistandard.PICMI_ParticleDiagnostic, WarpXDiagnostic
                     variables.add("Bx")
                     variables.add("By")
                     variables.add("Bz")
+                elif dataname == "spin":
+                    variables.add("sx")
+                    variables.add("sy")
+                    variables.add("sz")
                 elif dataname in [
                     "x",
                     "y",
@@ -4133,6 +4158,9 @@ class ParticleDiagnostic(picmistandard.PICMI_ParticleDiagnostic, WarpXDiagnostic
                     "Et",
                     "Br",
                     "Bt",
+                    "sx",
+                    "sy",
+                    "sz",
                 ]:
                     if pywarpx.geometry.dims == "1" and (
                         dataname == "x" or dataname == "y"

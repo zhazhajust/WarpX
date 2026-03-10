@@ -318,21 +318,27 @@ PhysicalParticleContainer::PhysicalParticleContainer (AmrCore* amr_core, int isp
         AddRealComp("ux_prev");
         AddRealComp("uy_prev");
         AddRealComp("uz_prev");
+        
         // Initialize the spin
-        std::string spin_init_method = "random";
-        pp_species_name.query("spin_init_method", spin_init_method);
-        if (spin_init_method == "constants") {
-            // amrex::Abort("Spin initialization method not recognized");
-            // pp_species_name.query("spin_init_x", m_spin_init_x);
-            // pp_species_name.query("spin_init_y", m_spin_init_y);
-            // pp_species_name.query("spin_init_z", m_spin_init_z);
-            utils::parser::queryWithParser(pp_species_name, "spin_init_x", m_spin_init_x);
-            utils::parser::queryWithParser(pp_species_name, "spin_init_y", m_spin_init_y);
-            utils::parser::queryWithParser(pp_species_name, "spin_init_z", m_spin_init_z);
-            m_spin_init_method = 1;
-        } else {
-            m_spin_init_method = 0;
-        }
+        // std::string spin_init_method = "random";
+        // pp_species_name.query("spin_init_method", spin_init_method);
+
+        // if (spin_init_method == "constants") {
+        //     // amrex::Abort("Spin initialization method not recognized");
+        //     // pp_species_name.query("spin_init_x", m_spin_init_x);
+        //     // pp_species_name.query("spin_init_y", m_spin_init_y);
+        //     // pp_species_name.query("spin_init_z", m_spin_init_z);
+        //     utils::parser::queryWithParser(pp_species_name, "spin_init_x", m_spin_init_x);
+        //     utils::parser::queryWithParser(pp_species_name, "spin_init_y", m_spin_init_y);
+        //     utils::parser::queryWithParser(pp_species_name, "spin_init_z", m_spin_init_z);
+        //     m_spin_init_method = 1;
+        // } else {
+        //     m_spin_init_method = 0;
+        // }
+        
+        utils::parser::queryWithParser(pp_species_name, "spin_init_x", m_spin_init_x);
+        utils::parser::queryWithParser(pp_species_name, "spin_init_y", m_spin_init_y);
+        utils::parser::queryWithParser(pp_species_name, "spin_init_z", m_spin_init_z);
         // Read the Larmor radius and anomalous magnetic moment
         utils::parser::queryWithParser(pp_species_name, "spin_anom", m_anomalous_magnetic_moment);    
     }

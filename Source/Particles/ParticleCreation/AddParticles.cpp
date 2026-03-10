@@ -545,6 +545,29 @@ PhysicalParticleContainer::AddGaussianBeam (PlasmaInjector const& plasma_injecto
 
     AddNParticles(0, np, xp,  yp,  zp, uxp, uyp, uzp,
                   1, attr, 0, attr_int, 1);
+
+    // Initialize spin if needed
+    if (has_spin()) {
+        auto & warpx = WarpX::GetInstance();
+        for (int lev = 0; lev <= warpx.finestLevel(); ++lev) {
+            for (WarpXParIter pti(*this, lev); pti.isValid(); ++pti) {
+                const long np = pti.numParticles();
+                ParticleTileType& ptile = ParticlesAt(lev, pti);
+                auto& soa = ptile.GetStructOfArrays();
+                const SpinHelper spin_helper(soa, 0, has_spin());
+                auto const spin_init_x = this->m_spin_init_x;
+                auto const spin_init_y = this->m_spin_init_y;
+                auto const spin_init_z = this->m_spin_init_z;
+                amrex::ParallelForRNG(np,
+                    [=] AMREX_GPU_DEVICE (long ip, amrex::RandomEngine const& engine) noexcept {
+                        spin_helper.p_spin_x[ip] = spin_init_x;
+                        spin_helper.p_spin_y[ip] = spin_init_y;
+                        spin_helper.p_spin_z[ip] = spin_init_z; //spin_helper.getInitialSpinZ(engine)
+                });
+            }
+        }
+    }
+    
 }
 
 void
@@ -859,19 +882,11 @@ PhysicalParticleContainer::AddPlasma (PlasmaInjector const& plasma_injector, int
         amrex::ParserExecutor<7> const* user_int_parserexec_data = plasma_parser_helper.getUserIntParserExecData();
         amrex::ParserExecutor<7> const* user_real_parserexec_data = plasma_parser_helper.getUserRealParserExecData();
 
-        // SpinHelper spin_helper(soa, old_size, has_spin());
-        // amrex::ParticleReal* p_track_spin_x = spin_helper.getSpinXPtr();
-        amrex::ParticleReal* p_track_spin_x = nullptr;
-        amrex::ParticleReal* p_track_spin_y = nullptr;
-        amrex::ParticleReal* p_track_spin_z = nullptr;
-
-        const bool loc_has_spin = has_spin();
-        if(loc_has_spin){
-            p_track_spin_x = soa.GetRealData("sx").data() + old_size;
-            p_track_spin_y = soa.GetRealData("sy").data() + old_size;
-            p_track_spin_z = soa.GetRealData("sz").data() + old_size;
-        }
-
+        const SpinHelper spin_helper(soa, old_size, has_spin());
+        auto const spin_init_x = this->m_spin_init_x;
+        auto const spin_init_y = this->m_spin_init_y;
+        auto const spin_init_z = this->m_spin_init_z;
+        
         int* pi = nullptr;
         if (do_field_ionization) {
             pi = soa.GetIntData("ionizationLevel").data() + old_size;
@@ -1093,13 +1108,10 @@ PhysicalParticleContainer::AddPlasma (PlasmaInjector const& plasma_injector, int
                     pa_user_real_data[ia][ip] = user_real_parserexec_data[ia](pos.x, pos.y, pos.z, u.x, u.y, u.z, t);
                 }
 
-                if(loc_has_spin){
-                    // p_track_spin_x[ip] = spin_helper.getInitialSpinX(engine);
-                    // p_track_spin_x[ip] = spin_helper.getInitialSpinX(engine);
-                    // p_track_spin_x[ip] = spin_helper.getInitialSpinX(engine);
-                    p_track_spin_x[ip] = m_spin_init_x;
-                    p_track_spin_y[ip] = m_spin_init_y;
-                    p_track_spin_z[ip] = m_spin_init_z;
+                if(spin_helper.has_spin){
+                    spin_helper.p_spin_x[ip] = spin_init_x;
+                    spin_helper.p_spin_y[ip] = spin_init_y;
+                    spin_helper.p_spin_z[ip] = spin_init_z; //spin_helper.getInitialSpinZ(engine)
                 }
 
                 u.x *= PhysConst::c;
@@ -1373,19 +1385,11 @@ PhysicalParticleContainer::AddPlasmaFlux (PlasmaInjector const& plasma_injector,
         amrex::ParserExecutor<7> const* user_int_parserexec_data = plasma_parser_helper.getUserIntParserExecData();
         amrex::ParserExecutor<7> const* user_real_parserexec_data = plasma_parser_helper.getUserRealParserExecData();
 
-        // SpinHelper spin_helper(soa, old_size, has_spin());
-        // amrex::ParticleReal* p_track_spin_x = spin_helper.getSpinXPtr();
-        amrex::ParticleReal* p_track_spin_x = nullptr;
-        amrex::ParticleReal* p_track_spin_y = nullptr;
-        amrex::ParticleReal* p_track_spin_z = nullptr;
-
-        const bool loc_has_spin = has_spin();
-        if(loc_has_spin){
-            p_track_spin_x = soa.GetRealData("sx").data() + old_size;
-            p_track_spin_y = soa.GetRealData("sy").data() + old_size;
-            p_track_spin_z = soa.GetRealData("sz").data() + old_size;
-        }
-
+        SpinHelper spin_helper(soa, old_size, has_spin());
+        auto const spin_init_x = this->m_spin_init_x;
+        auto const spin_init_y = this->m_spin_init_y;
+        auto const spin_init_z = this->m_spin_init_z;
+    
         int* p_ion_level = nullptr;
         if (do_field_ionization) {
             p_ion_level = soa.GetIntData("ionizationLevel").data() + old_size;
@@ -1633,15 +1637,12 @@ PhysicalParticleContainer::AddPlasmaFlux (PlasmaInjector const& plasma_injector,
                     pa_user_real_data[ia][ip] = user_real_parserexec_data[ia](pos.x, pos.y, pos.z, u.x, u.y, u.z, t);
                 }
 
-                if(loc_has_spin){
-                    // p_track_spin_x[ip] = spin_helper.getInitialSpinX(engine);
-                    // p_track_spin_x[ip] = spin_helper.getInitialSpinX(engine);
-                    // p_track_spin_x[ip] = spin_helper.getInitialSpinX(engine);
-                    p_track_spin_x[ip] = m_spin_init_x;
-                    p_track_spin_y[ip] = m_spin_init_y;
-                    p_track_spin_z[ip] = m_spin_init_z;
+                if(spin_helper.has_spin){
+                    spin_helper.p_spin_x[ip] = spin_init_x;
+                    spin_helper.p_spin_y[ip] = spin_init_y;
+                    spin_helper.p_spin_z[ip] = spin_init_z; //spin_helper.getInitialSpinZ(engine)
                 }
-                
+
 #if defined(WARPX_DIM_RZ) || defined(WARPX_DIM_RCYLINDER)
                 // The particle weight is proportional to the user-specified
                 // flux and the emission surface within

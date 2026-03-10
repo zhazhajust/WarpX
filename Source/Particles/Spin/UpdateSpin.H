@@ -9,6 +9,7 @@
 
 using namespace amrex::literals;
 
+/** \brief **/
 AMREX_GPU_HOST_DEVICE AMREX_INLINE
 void UpdateSpin(
     amrex::ParticleReal& sx_f, amrex::ParticleReal& sy_f, amrex::ParticleReal& sz_f,
