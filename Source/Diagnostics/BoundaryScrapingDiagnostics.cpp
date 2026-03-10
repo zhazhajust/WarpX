@@ -7,15 +7,17 @@
 
 #include "BoundaryScrapingDiagnostics.H"
 #include "EmbeddedBoundary/Enabled.H"
-#include "ComputeDiagFunctors/ComputeDiagFunctor.H"
 #include "Diagnostics/Diagnostics.H"
 #include "Diagnostics/FlushFormats/FlushFormat.H"
 #include "Particles/ParticleBoundaryBuffer.H"
 #include "Utils/TextMsg.H"
 #include "WarpX.H"
 
-#include <AMReX.H>
+#include <AMReX_Geometry.H>
+#include <AMReX_MultiFab.H>
+#include <AMReX_REAL.H>
 #include <AMReX_ParmParse.H>
+#include <AMReX_Vector.H>
 
 #include <set>
 #include <string>
@@ -98,7 +100,7 @@ BoundaryScrapingDiagnostics::InitializeParticleBuffer (const MultiParticleContai
     for (int i_buffer = 0; i_buffer < m_num_buffers; ++i_buffer) {
         for (auto const& species_name : m_output_species_names){
             WarpXParticleContainer* pc = &mpc.GetParticleContainerFromName(species_name);
-            PinnedMemoryParticleContainer* bnd_buffer = particle_buffer.getParticleBufferPointer(species_name, i_buffer);
+            WarpXParticleContainer::Base* bnd_buffer = particle_buffer.getParticleBufferPointer(species_name, i_buffer);
             m_output_species[i_buffer].push_back(ParticleDiag(m_diag_name, species_name, pc, bnd_buffer));
         }
     }

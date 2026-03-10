@@ -72,6 +72,11 @@ public:
         m_linear_function->curTimeStep( a_dt );
     }
 
+    PreconditionerType GetPreconditionerType () const override
+    {
+        return m_linear_function->pcType();
+    }
+
     void PrintParams () const override
     {
         amrex::Print()     << "Newton verbose:             " << (this->m_verbose?"true":"false") << "\n";
@@ -348,7 +353,7 @@ void NewtonSolver<Vec,Ops>::Solve ( Vec&         a_U,
                            << std::scientific << std::setprecision(5) << norm_rel << " (rel.)" << "\n";
         }
 
-        if (norm_abs < m_rtol) {
+        if (norm_abs < m_atol) {
             if (this->m_verbose) {
                 amrex::Print() << "Newton: exiting at iteration = " << std::setw(3) << iter
                                << ". Satisfied absolute tolerance " << m_atol << "\n";
@@ -373,6 +378,12 @@ void NewtonSolver<Vec,Ops>::Solve ( Vec&         a_U,
                               " has increased by 100X from that after first iteration.";
             WARPX_ABORT_WITH_MESSAGE(convergenceMsg.str());
         }
+
+        // Prepare for the linear solve
+        m_ops->PreLinearSolve();
+        m_linear_function->setBaseSolution(a_U);
+        m_linear_function->setBaseRHS(m_R);
+        m_linear_function->updatePreCondMat(a_U);
 
         // Solve linear system for Newton step [Jac]*dU = F
         m_dU.zero();
@@ -448,13 +459,6 @@ void NewtonSolver<Vec,Ops>::EvalResidual ( Vec&         a_F,
 {
     BL_PROFILE("NewtonSolver::EvalResidual()");
     m_ops->ComputeRHS( m_R, a_U, a_time, a_iter, false );
-
-    // set base U and R(U) for matrix-free Jacobian action calculation
-    m_linear_function->setBaseSolution(a_U);
-    m_linear_function->setBaseRHS(m_R);
-
-    // update preconditioner
-    m_linear_function->updatePreCondMat(a_U);
 
     // Compute residual: F(U) = U - b - R(U)
     a_F.Copy(a_U);
