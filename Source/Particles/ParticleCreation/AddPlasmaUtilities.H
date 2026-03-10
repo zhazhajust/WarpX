@@ -338,4 +338,71 @@ struct QEDHelper
 };
 #endif
 
+struct SpinHelper
+{
+    template <typename SoAType>
+    SpinHelper(SoAType& a_soa, std::size_t old_size, bool a_has_spin)
+        : has_spin(a_has_spin)
+    {
+        if (has_spin) {
+            p_spin_x = a_soa.GetRealData("sx").data() + old_size;
+            p_spin_y = a_soa.GetRealData("sy").data() + old_size;
+            p_spin_z = a_soa.GetRealData("sz").data() + old_size;
+// #ifdef AMREX_USE_GPU
+//         amrex::Gpu::copyAsync(amrex::Gpu::hostToDevice, m_pa_user_int_pinned.begin(),
+//                               m_pa_user_int_pinned.end(), m_d_pa_user_int.begin());
+//         amrex::Gpu::copyAsync(amrex::Gpu::hostToDevice, m_pa_user_real_pinned.begin(),
+//                               m_pa_user_real_pinned.end(), m_d_pa_user_real.begin());
+//         amrex::Gpu::copyAsync(amrex::Gpu::hostToDevice, wrapper.m_user_int_attrib_parserexec_pinned.begin(),
+//                               wrapper.m_user_int_attrib_parserexec_pinned.end(), m_d_user_int_attrib_parserexec.begin());
+//         amrex::Gpu::copyAsync(amrex::Gpu::hostToDevice, wrapper.m_user_real_attrib_parserexec_pinned.begin(),
+//                               wrapper.m_user_real_attrib_parserexec_pinned.end(), m_d_user_real_attrib_parserexec.begin());
+// #endif
+        }
+    }
+
+    // // 指针 getters
+    // AMREX_GPU_HOST_DEVICE
+    // amrex::ParticleReal* getSpinXPtr() const noexcept { return p_spin_x; }
+    // AMREX_GPU_HOST_DEVICE
+    // amrex::ParticleReal* getSpinYPtr() const noexcept { return p_spin_y; }
+    // AMREX_GPU_HOST_DEVICE
+    // amrex::ParticleReal* getSpinZPtr() const noexcept { return p_spin_z; }
+
+    // 与你当前用法一致：把想要的初值传进来，函数原样返回
+    // AMREX_GPU_HOST_DEVICE
+    amrex::ParticleReal getInitialSpinX(amrex::ParticleReal v) const noexcept { return v; }
+    // AMREX_GPU_HOST_DEVICE
+    amrex::ParticleReal getInitialSpinY(amrex::ParticleReal v) const noexcept { return v; }
+    // AMREX_GPU_HOST_DEVICE
+    amrex::ParticleReal getInitialSpinZ(amrex::ParticleReal v) const noexcept { return v; }
+
+    // // 可选：一次性设置第 i 个粒子（若你愿意用）
+    // AMREX_GPU_HOST_DEVICE
+    // inline void setInitialSpin(std::size_t i,
+    //                            amrex::ParticleReal sx,
+    //                            amrex::ParticleReal sy,
+    //                            amrex::ParticleReal sz) const noexcept
+    // {
+    //     if (has_spin) {
+    //         p_spin_x[i] = sx;
+    //         p_spin_y[i] = sy;
+    //         p_spin_z[i] = sz;
+    //     }
+    // }
+
+    // 数据成员
+    amrex::ParticleReal* p_spin_x = nullptr;
+    amrex::ParticleReal* p_spin_y = nullptr;
+    amrex::ParticleReal* p_spin_z = nullptr;
+    bool has_spin = false;
+// #ifdef AMREX_USE_GPU
+//     // To avoid using managed memory, we first define pinned memory vector, initialize on cpu,
+//     // and them memcpy to device from host
+//     amrex::Gpu::DeviceVector<amrex::ParticleReal*> m_d_spin_x;
+//     amrex::Gpu::DeviceVector<amrex::ParticleReal*> m_d_spin_y;
+//     amrex::Gpu::DeviceVector<amrex::ParticleReal*> m_d_spin_z;
+// #endif
+};
+
 #endif /*WARPX_ADDPLASMAUTILITIES_H_*/
