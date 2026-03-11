@@ -1475,7 +1475,7 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
     amrex::ParticleReal* AMREX_RESTRICT sx = nullptr;
     amrex::ParticleReal* AMREX_RESTRICT sy = nullptr;
     amrex::ParticleReal* AMREX_RESTRICT sz = nullptr;
-    const amrex::ParticleReal tauconst = dt * q / ( 2 * m );
+    const amrex::ParticleReal tauconst = dt * q / ( 2 * mass );
     const amrex::ParticleReal anom = this->m_anomalous_magnetic_moment;
     const bool local_has_spin = has_spin();
     if(local_has_spin){
