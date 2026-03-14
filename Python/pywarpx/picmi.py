@@ -18,6 +18,7 @@ import periodictable
 import picmistandard
 import pywarpx
 import pywarpx.callbacks
+from picmistandard.base import _ClassWithInit
 
 codename = "warpx"
 picmistandard.register_codename(codename)
@@ -194,6 +195,18 @@ class Species(picmistandard.PICMI_Species):
     warpx_do_temperature_deposition: bool, default=False
         This flag is set per species to do another pass to deposit temperature
         on each timestep if required. Currently only works with Ohm's Law Hybrid Solver.
+
+    warpx_track_spin: bool, default=False
+        Whether or not to track particle spin.
+
+    warpx_spin_init_x: float, default=0.0
+        Initial x component of the particle spin.
+    
+    warpx_spin_init_y: float, default=0.0
+        Initial y component of the particle spin.
+
+    warpx_spin_init_z: float, default=1.0
+        Initial z component of the particle spin.
     """
 
     def init(self, kw):
@@ -328,6 +341,11 @@ class Species(picmistandard.PICMI_Species):
 
         self.do_temperature_deposition = kw.pop("warpx_do_temperature_deposition", None)
 
+        self.track_spin = kw.pop("warpx_track_spin", False)
+        self.spin_init_x = kw.pop("warpx_spin_init_x", 0.0)
+        self.spin_init_y = kw.pop("warpx_spin_init_y", 0.0)
+        self.spin_init_z = kw.pop("warpx_spin_init_z", 1.0)
+
     def species_initialize_inputs(
         self,
         layout,
@@ -381,6 +399,10 @@ class Species(picmistandard.PICMI_Species):
             resampling_algorithm_n_phi=self.resampling_algorithm_n_phi,
             resampling_algorithm_delta_u=self.resampling_algorithm_delta_u,
             do_temperature_deposition=self.do_temperature_deposition,
+            track_spin=self.track_spin,
+            spin_init_x=self.spin_init_x,
+            spin_init_y=self.spin_init_y,
+            spin_init_z=self.spin_init_z,
         )
 
         # add reflection models
@@ -1286,6 +1308,10 @@ class Cartesian2DGrid(picmistandard.PICMI_Cartesian2DGrid):
         self.start_moving_window_step = kw.pop("warpx_start_moving_window_step", None)
         self.end_moving_window_step = kw.pop("warpx_end_moving_window_step", None)
 
+        self.refinement_factor = kw.pop('warpx_refinement_factor', None)
+        # Refinement plasma
+        self.warpx_refine_plasma = kw.pop('warpx_refine_plasma', None)
+        
         # Geometry
         # Set these as soon as the information is available
         # (since these are needed to determine which shared object to load)
@@ -1351,9 +1377,13 @@ class Cartesian2DGrid(picmistandard.PICMI_Cartesian2DGrid):
             pywarpx.warpx.fine_tag_lo = self.refined_regions[0][1]
             pywarpx.warpx.fine_tag_hi = self.refined_regions[0][2]
             # The refinement_factor is ignored (assumed to be [2,2])
+            if len(self.refinement_factor) == 2:
+                pywarpx.amr.ref_ratio_vect = self.refinement_factor
         else:
             pywarpx.amr.max_level = 0
 
+        if self.warpx_refine_plasma:
+            pywarpx.warpx.refine_plasma = True
 
 class Cartesian3DGrid(picmistandard.PICMI_Cartesian3DGrid):
     """
@@ -1436,6 +1466,10 @@ class Cartesian3DGrid(picmistandard.PICMI_Cartesian3DGrid):
         self.start_moving_window_step = kw.pop("warpx_start_moving_window_step", None)
         self.end_moving_window_step = kw.pop("warpx_end_moving_window_step", None)
 
+        self.refinement_factor = kw.pop('warpx_refinement_factor', None)
+        # Refinement plasma
+        self.warpx_refine_plasma = kw.pop('warpx_refine_plasma', None)
+    
         # Geometry
         # Set these as soon as the information is available
         # (since these are needed to determine which shared object to load)
@@ -1508,9 +1542,13 @@ class Cartesian3DGrid(picmistandard.PICMI_Cartesian3DGrid):
             pywarpx.warpx.fine_tag_lo = self.refined_regions[0][1]
             pywarpx.warpx.fine_tag_hi = self.refined_regions[0][2]
             # The refinement_factor is ignored (assumed to be [2,2,2])
+            if len(self.refinement_factor) == 3:
+                pywarpx.amr.ref_ratio_vect = self.refinement_factor
         else:
             pywarpx.amr.max_level = 0
 
+        if self.warpx_refine_plasma:
+            pywarpx.warpx.refine_plasma = True
 
 class ElectromagneticSolver(picmistandard.PICMI_ElectromagneticSolver):
     """
@@ -2241,6 +2279,208 @@ class GaussianLaser(picmistandard.PICMI_GaussianLaser):
 
         self.laser.do_continuous_injection = self.fill_in
 
+class FlyfocLaser(_ClassWithInit):
+    """
+    Specifies a Gaussian laser distribution.
+
+    More precisely, the electric field **near the focal plane** is given by:
+
+    .. math::
+
+        E(\\boldsymbol{x},t) = a_0\\times E_0\,
+        \exp\left( -\\frac{r^2}{w_0^2} - \\frac{(z-z_0-ct)^2}{c^2\\tau^2} \\right)
+        \cos[ k_0( z - z_0 - ct ) - \phi_{cep} ]
+
+    where :math:`k_0 = 2\pi/\\lambda_0` is the wavevector and where
+    :math:`E_0 = m_e c^2 k_0 / q_e` is the field amplitude for :math:`a_0=1`.
+
+    .. note::
+
+        The additional terms that arise **far from the focal plane**
+        (Gouy phase, wavefront curvature, ...) are not included in the above
+        formula for simplicity, but are of course taken into account by
+        the code, when initializing the laser pulse away from the focal plane.
+
+    Parameters
+    ----------
+    wavelength: float
+        Laser wavelength [m], defined as :math:`\\lambda_0` in the above formula
+
+    waist: float
+        Waist of the Gaussian pulse at focus [m], defined as :math:`w_0` in the above formula
+
+    duration: float
+        Duration of the Gaussian pulse [s], defined as :math:`\\tau` in the above formula
+
+    propagation_direction: unit vector of length 3 of floats
+        Direction of propagation [1]
+
+    polarization_direction: unit vector of length 3 of floats
+        Direction of polarization [1]
+
+    z_left: float
+        Position of the left edge of the grid [m]
+
+    z_right: float
+        Position of the right edge of the grid [m]
+
+    vff: float
+        Forward light speed [m/s]
+
+    pulse_number: int
+        Number of pulses
+
+    centroid_position: vector of length 3 of floats
+        Position of the laser centroid at time 0 [m]
+
+    a0: float
+        Normalized vector potential at focus
+        Specify either a0 or E0 (E0 takes precedence).
+
+    E0: float
+        Maximum amplitude of the laser field [V/m]
+        Specify either a0 or E0 (E0 takes precedence).
+
+    phi0: float
+        Carrier envelope phase (CEP) [rad]
+
+    zeta: float
+        Spatial chirp at focus (in the lab frame) [m.s]
+
+    beta: float
+        Angular dispersion at focus (in the lab frame) [rad.s]
+
+    phi2: float
+        Temporal chirp at focus (in the lab frame) [s^2]
+
+    fill_in: bool, default=True
+        Flags whether to fill in the empty spaced opened up when the grid moves
+
+    name: string, optional
+        Optional name of the laser
+
+    focal_type: string, optional
+        Type of focal trajectory, either "math" or "linear"
+        If None, no fly-focusing is applied.
+    
+    focal_spot: string, optional
+        If focal_type is "math", this specifies the mathematical function
+        that describes the focal spot trajectory. It must be a function of time `i`.
+        Examples include "0.5*sin(2*pi*1e12*i)" or "0.5*i".
+        If None, no fly-focusing is applied.
+    
+    focal_delay: string, optional
+        If focal_type is "math", this specifies the mathematical function
+        that describes the focal delay. It must be a function of time `i`.
+        Examples include "1e-12*sin(2*pi*1e12*i)" or "1e-12*i".
+        If None, no fly-focusing is applied.
+    
+    focal_weight: string, optional
+        If focal_type is "math", this specifies the mathematical function
+        that describes the focal weight. It must be a function of time `i`.
+        Examples include "0.5*sin(2*pi*1e12*i)" or "0.5*i".
+        If None, no fly-focusing is applied.
+
+    focal_phase: string, optional
+        If focal_type is "math", this specifies the mathematical function
+        that describes the focal phase. It must be a function of time `i`.
+        Examples include "0.5*sin(2*pi*1e12*i)" or "0.5*i".
+        If None, no fly-focusing is applied.
+    """
+    def __init__(self, wavelength, waist, duration,
+                 propagation_direction,
+                 polarization_direction,
+                 centroid_position,
+                 focal_type = None,
+                 focal_spot = None, focal_delay = None,
+                 focal_weight = None, focal_phase = None,
+                 z_left = None, z_right = None, vff = None,
+                 pulse_number = None,
+                 if_norm_env = True,
+                 a0 = None,
+                 E0 = None,
+                 phi0 = None,
+                 zeta = None,
+                 beta = None,
+                 phi2 = None,
+                 name = None,
+                 fill_in = True,
+                 **kw):
+
+        assert E0 is not None or a0 is not None, 'One of E0 or a0 must be speficied'
+
+        k0 = 2.*math.pi/wavelength
+        if E0 is None:
+            E0 = a0*_get_constants().m_e*_get_constants().c**2*k0/_get_constants().q_e
+        if a0 is None:
+            a0 = E0/(_get_constants().m_e*_get_constants().c**2*k0/_get_constants().q_e)
+
+        self.wavelength = wavelength
+        self.k0 = k0
+        self.waist = waist
+        self.duration = duration
+        self.centroid_position = centroid_position
+        self.propagation_direction = propagation_direction
+        self.polarization_direction = polarization_direction
+        self.a0 = a0
+        self.E0 = E0
+        self.phi0 = phi0
+        self.zeta = zeta
+        self.beta = beta
+        self.phi2 = phi2
+        self.name = name
+        self.fill_in = fill_in
+        self.if_norm_env = if_norm_env
+
+        self.pulse_number = pulse_number        
+        self.focal_type = focal_type
+        self.focal_spot = focal_spot
+        self.focal_delay = focal_delay
+        self.focal_weight = focal_weight
+        self.focal_phase = focal_phase
+        self.z_left = z_left
+        self.z_right = z_right
+        self.vff = vff
+        
+        self.handle_init(kw)
+
+    def laser_initialize_inputs(self):
+        self.laser_number = len(pywarpx.lasers.names) + 1
+        if self.name is None:
+            self.name = 'laser{}'.format(self.laser_number)
+
+        self.laser = pywarpx.Lasers.newlaser(self.name)
+
+        self.laser.profile = "flyfoc"
+        self.laser.wavelength = self.wavelength  # The wavelength of the laser (in meters)
+        self.laser.e_max = self.E0  # Maximum amplitude of the laser field (in V/m)
+        self.laser.polarization = self.polarization_direction  # The main polarization vector
+        self.laser.profile_waist = self.waist  # The waist of the laser (in meters)
+        self.laser.profile_duration = self.duration  # The duration of the laser (in seconds)
+        self.laser.direction = self.propagation_direction
+
+        self.laser.zeta = self.zeta
+        self.laser.beta = self.beta
+        self.laser.phi2 = self.phi2
+        self.laser.phi0 = self.phi0
+
+        ### fly focus params
+        self.laser.pulse_number = self.pulse_number
+        self.laser.focal_type = self.focal_type
+        self.laser.if_norm_env = self.if_norm_env
+
+        ### math function
+        self.laser.focal_spot = self.focal_spot
+        self.laser.focal_delay = self.focal_delay
+        self.laser.focal_weight = self.focal_weight
+        self.laser.focal_phase = self.focal_phase
+
+        ### linear function
+        self.laser.z_left = self.z_left
+        self.laser.z_right = self.z_right
+        self.laser.vff = self.vff
+
+        self.laser.do_continuous_injection = self.fill_in
 
 class AnalyticLaser(picmistandard.PICMI_AnalyticLaser):
     def init(self, kw):
@@ -2303,6 +2543,13 @@ class LaserAntenna(picmistandard.PICMI_LaserAntenna):
                 * self.normal_vector[2]
             ) / constants.c
 
+        if isinstance(laser, FlyfocLaser):
+            # The time at which the laser reaches its peak (in seconds)
+            laser.laser.profile_t_peak = np.sqrt(
+                (self.position[0] - laser.centroid_position[0])**2 +
+                (self.position[1] - laser.centroid_position[1])**2 +
+                (self.position[2] - laser.centroid_position[2])**2
+            ) / constants.c 
 
 class LoadInitialField(picmistandard.PICMI_LoadGriddedField):
     """
@@ -3269,6 +3516,9 @@ class Simulation(picmistandard.PICMI_Simulation):
         If `sort_intervals` is activated and `sort_particles_for_deposition` is false, particles are sorted in bins of `sort_bin_size` cells.
         In 2D, only the first two elements are read.
 
+    warpx_omp_threads: int, optional
+        The openmp threads used for simulation.
+
     warpx_used_inputs_file: string, optional
         The name of the text file that the used input parameters is written to,
 
@@ -3374,6 +3624,7 @@ class Simulation(picmistandard.PICMI_Simulation):
 
         self.inputs_initialized = False
         self.warpx_initialized = False
+        self.amrex_omp_threads = kw.pop('warpx_omp_threads', None)
 
     def initialize_inputs(self):
         if self.inputs_initialized:
@@ -3540,6 +3791,9 @@ class Simulation(picmistandard.PICMI_Simulation):
         if self.amrex_use_gpu_aware_mpi is not None:
             pywarpx.amrex.use_gpu_aware_mpi = self.amrex_use_gpu_aware_mpi
 
+        if self.amrex_omp_threads is not None:
+            pywarpx.amrex.omp_threads = self.amrex_omp_threads
+
         if self.do_device_synchronize is not None:
             pywarpx.warpx.do_device_synchronize = self.do_device_synchronize
 
@@ -3702,6 +3956,21 @@ class FieldDiagnostic(picmistandard.PICMI_FieldDiagnostic, WarpXDiagnosticBase):
         be calculated separately for each specified species. If not passed, default is
         all of the available particle species.
 
+    warpx_diag_lo: float, optional
+        The low cornor of diagnostics.
+
+    warpx_diag_hi: float, optional
+        The high cornor of diagnostics.
+
+    warpx_flush_level: float, optional
+        The max level for output
+
+    warpx_coarsening_ratio: list of float, optional
+        Reduce size of the field output by this ratio in each dimension.
+
+    warpx_max_move_step: int, optional
+        The max moving step.
+        
     warpx_verbose: int, optional
         Verbosity level to use for printing diagnostic output information.
     """
@@ -3722,6 +3991,11 @@ class FieldDiagnostic(picmistandard.PICMI_FieldDiagnostic, WarpXDiagnosticBase):
         self.particle_fields_species = kw.pop("warpx_particle_fields_species", None)
         self.verbose = kw.pop("warpx_verbose", None)
 
+        self.field_diag_hi = kw.pop('warpx_diag_hi', None)
+        self.field_diag_lo = kw.pop('warpx_diag_lo', None)
+        self.flush_level = kw.pop('warpx_flush_level', None)
+        self.coarsening_ratio = kw.pop('warpx_coarsening_ratio', None)
+        self.max_move_step = kw.pop('warpx_max_move_step', None)
     def diagnostic_initialize_inputs(self):
         self.add_diagnostic()
 
@@ -3733,9 +4007,12 @@ class FieldDiagnostic(picmistandard.PICMI_FieldDiagnostic, WarpXDiagnosticBase):
         self.diagnostic.dump_rz_modes = self.dump_rz_modes
         self.diagnostic.dump_last_timestep = self.dump_last_timestep
         self.diagnostic.intervals = self.period
+        self.diagnostic.diag_hi = self.field_diag_hi
+        self.diagnostic.diag_lo = self.field_diag_lo
+        self.diagnostic.flush_level = self.flush_level
+        self.diagnostic.coarsening_ratio = self.coarsening_ratio
+        self.diagnostic.max_move_step = self.max_move_step
         self.diagnostic.set_or_replace_attr("verbose", self.verbose)
-        self.diagnostic.diag_lo = self.lower_bound
-        self.diagnostic.diag_hi = self.upper_bound
         if self.number_of_cells is not None:
             self.diagnostic.coarsening_ratio = (
                 np.array(self.grid.number_of_cells) / np.array(self.number_of_cells)
@@ -4074,6 +4351,10 @@ class ParticleDiagnostic(picmistandard.PICMI_ParticleDiagnostic, WarpXDiagnostic
                     variables.add("Bx")
                     variables.add("By")
                     variables.add("Bz")
+                elif dataname == "spin":
+                    variables.add("sx")
+                    variables.add("sy")
+                    variables.add("sz")
                 elif dataname in [
                     "x",
                     "y",
@@ -4092,6 +4373,9 @@ class ParticleDiagnostic(picmistandard.PICMI_ParticleDiagnostic, WarpXDiagnostic
                     "Et",
                     "Br",
                     "Bt",
+                    "sx",
+                    "sy",
+                    "sz",
                 ]:
                     if pywarpx.geometry.dims == "1" and (
                         dataname == "x" or dataname == "y"
@@ -4566,6 +4850,15 @@ class ReducedDiagnostic(picmistandard.base._ClassWithInit, WarpXDiagnosticBase):
 
     target_up_x, target_up_y, target_up_z: floats
         For diagnostic type 'FieldProbe', the vector specifying up in the 'Plane'
+
+    start_step, stop_step: floats, optional
+        Timestep that Start/Stop probe the field 
+
+    start_time: floats, optional
+        Time that Start probe the field
+        
+    stop_move_step: floats, optional
+        If do_moving_window_FP is True, the fieldprobe particles will stop move after stop_move_step
     """
 
     def __init__(
@@ -4644,8 +4937,11 @@ class ReducedDiagnostic(picmistandard.base._ClassWithInit, WarpXDiagnosticBase):
         self.interp_order = kw.pop("interp_order", None)
         self.integrate = kw.pop("integrate", None)
         self.do_moving_window_FP = kw.pop("do_moving_window_FP", None)
-
-        if self.probe_geometry.lower() != "point":
+        self.start_step = kw.pop("start_step", None)
+        self.stop_step = kw.pop("stop_step", None)
+        self.stop_move_step = kw.pop("stop_move_step", None)
+        self.start_time = kw.pop("start_time", None)
+        if self.probe_geometry.lower() != 'point':
             self.resolution = kw.pop("resolution")
 
         if self.probe_geometry.lower() == "line":

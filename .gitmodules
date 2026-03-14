@@ -1,0 +1,3 @@
+[submodule "Source/Laser/LibFlyfocs"]
+	path = Source/Laser/LibFlyfocs
+	url = git@github.com:zhazhajust/LibFlyfocs.git
