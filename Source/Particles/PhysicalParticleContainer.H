@@ -375,6 +375,12 @@ public:
     bool has_breit_wheeler () const override;
 
     /**
+     * Tells if this PhysicalParticleContainer has spin
+     * @return true if process is enabled
+     */
+    bool has_spin () const;
+
+    /**
      * Acquires a shared smart pointer to a BreitWheelerEngine
      * @param[in] ptr the pointer
      */
@@ -462,6 +468,11 @@ protected:
     std::string species_name;
     std::vector<std::unique_ptr<PlasmaInjector>> plasma_injectors;
 
+    // Spin init method and parameters
+    int m_spin_init_method = 0;
+    amrex::ParticleReal m_spin_init_x = 0.0, m_spin_init_y = 0.0, m_spin_init_z = 1.0;
+    amrex::ParticleReal m_anomalous_magnetic_moment = 0.00115965218128;
+
     // When true, adjust the transverse particle positions accounting
     // for the difference between the Lorentz transformed time of the
     // particle and the time of the boosted frame.
@@ -492,6 +503,9 @@ protected:
 
     // Flag controlling whether or not variance and then temperatures are computed per species
     bool m_do_temperature_deposition = false;
+
+    // A flag to enable tracking of spin for leptons
+    bool m_track_spin = false;
 
     std::unique_ptr<warpx::particles::deposition::VarianceAccumulationBuffer> local_temperature_arrays;
 
