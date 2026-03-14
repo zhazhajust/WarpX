@@ -87,7 +87,7 @@ FieldProbe::FieldProbe (const std::string& rd_name)
         utils::parser::getWithParser(
             pp_rd_name, "x_probe", x_probe);
 #endif
-#if defined(WARPX_DIM_3D)
+#if defined(WARPX_DIM_3D) || defined(WARPX_DIM_RZ)
         utils::parser::getWithParser(
             pp_rd_name, "y_probe", y_probe);
 #endif
@@ -103,7 +103,7 @@ FieldProbe::FieldProbe (const std::string& rd_name)
         utils::parser::queryWithParser(pp_rd_name, "x_probe", x_probe);
         utils::parser::queryWithParser(pp_rd_name, "x1_probe", x1_probe);
 #endif
-#if defined(WARPX_DIM_3D)
+#if defined(WARPX_DIM_3D) || defined(WARPX_DIM_RZ)
         utils::parser::queryWithParser(pp_rd_name, "y_probe", y_probe);
         utils::parser::queryWithParser(pp_rd_name, "y1_probe", y1_probe);
 #endif
@@ -120,7 +120,7 @@ FieldProbe::FieldProbe (const std::string& rd_name)
             "Plane probe should be used in a 2D or 3D simulation only");
 #endif
         m_probe_geometry = DetectorGeometry::Plane;
-#if defined(WARPX_DIM_3D)
+#if defined(WARPX_DIM_3D) || defined(WARPX_DIM_RZ)
         utils::parser::queryWithParser(pp_rd_name, "y_probe", y_probe);
         utils::parser::queryWithParser(pp_rd_name, "target_normal_x", target_normal_x);
         utils::parser::queryWithParser(pp_rd_name, "target_normal_y", target_normal_y);
@@ -144,6 +144,14 @@ FieldProbe::FieldProbe (const std::string& rd_name)
     pp_rd_name.query("integrate", m_field_probe_integrate);
     utils::parser::queryWithParser(pp_rd_name, "interp_order", interp_order);
     pp_rd_name.query("do_moving_window_FP", do_moving_window_FP);
+
+    utils::parser::queryWithParser(pp_rd_name, "start_step", start_step);
+    utils::parser::queryWithParser(pp_rd_name, "stop_step", stop_step);
+    utils::parser::queryWithParser(pp_rd_name, "stop_move_step", stop_move_step);
+    // utils::parser::queryWithParser(pp_rd_name, "max_level", max_level);
+    // if(nLevel > max_level + 1) nLevel = max_level + 1;
+
+    utils::parser::queryWithParser(pp_rd_name, "start_time", start_time);
 
     bool raw_fields;
     const bool raw_fields_specified = pp_rd_name.query("raw_fields", raw_fields);
@@ -170,15 +178,17 @@ FieldProbe::FieldProbe (const std::string& rd_name)
     {
         if ( m_write_header )
         {
-            // open file
-            std::ofstream ofs{m_path + m_rd_name + "." + m_extension, std::ofstream::out};
+            // // open file
+            // std::ofstream ofs{m_path + m_rd_name + "." + m_extension, std::ofstream::out};
 
-            // write header row
-            int c = 0;
-            ofs << "[" << c++ << "]step()";
-            ofs << m_sep;
-            ofs << "[" << c++ << "]time(s)";
+            // // write header row
+            // int c = 0;
+            // ofs << "[" << c++ << "]step()";
+            // ofs << m_sep;
+            // ofs << "[" << c++ << "]time(s)";
             // maps FieldProbe observables to units
+
+            // IO process
             std::unordered_map< int, std::string > u_map;
 
             if (m_field_probe_integrate)
@@ -207,8 +217,19 @@ FieldProbe::FieldProbe (const std::string& rd_name)
                     {FieldProbePIdx::S , "-(W/m^2)"}
                 };
             }
-            for (int lev = 0; lev < nLevel; ++lev)
+            // for (int lev = 0; lev < nLevel; ++lev)
+            for (int lev = 0; lev < 1; ++lev)
             {
+                auto filename = lev > 0 ? m_path + m_rd_name + "_lvl_" + std::to_string(lev) + "." + m_extension:
+                    m_path + m_rd_name + "." + m_extension;
+                std::ofstream ofs{filename, std::ofstream::out};
+
+                // write header row
+                int c = 0;
+                ofs << "[" << c++ << "]step()";
+                ofs << m_sep;
+                ofs << "[" << c++ << "]time(s)";
+
                 ofs << m_sep;
                 ofs << "[" << c++ << "]part_x_lev" + std::to_string(lev) + "-(m)";
                 ofs << m_sep;
@@ -229,13 +250,21 @@ FieldProbe::FieldProbe (const std::string& rd_name)
                 ofs << "[" << c++ << "]part_Bz_lev" + std::to_string(lev) + u_map[FieldProbePIdx::Bz];
                 ofs << m_sep;
                 ofs << "[" << c++ << "]part_S_lev" + std::to_string(lev) + u_map[FieldProbePIdx::S];
-            }
-            ofs << "\n";
 
-            // close file
-            ofs.close();
+                ofs << std::endl;
+                ofs.close();
+            }
+            // ofs << std::endl;
+
+            // // close file
+            // ofs.close();
         }
     }
+
+    m_data_out_level = std::vector<amrex::Vector<amrex::Real>> (nLevel, amrex::Vector<amrex::Real>());
+    m_valid_particles_level = std::vector<long> (nLevel, 0);
+
+    //auto series = openPMD::Series(m_path + m_rd_name + ".h5", io::Access::CREATE);
 } // end constructor
 
 void FieldProbe::InitData ()
@@ -296,6 +325,7 @@ void FieldProbe::InitData ()
                 orthotarget[0] - target_up_x,
                 orthotarget[1] - target_up_y,
                 orthotarget[2] - target_up_z};
+            // normalize(direction[0], direction[1], direction[2]);
             normalize(direction[0], direction[1], direction[2]);
             const amrex::Real uppercorner[3]{
                 x_probe - (direction[0] * detector_radius),
@@ -330,15 +360,37 @@ void FieldProbe::InitData ()
                     temp_pos[0] = lowercorner[0] + SideStepSize[0] * sidestep + UpStepSize[0] * upstep;
                     temp_pos[1] = lowercorner[1] + SideStepSize[1] * sidestep + UpStepSize[1] * upstep;
                     temp_pos[2] = lowercorner[2] + SideStepSize[2] * sidestep + UpStepSize[2] * upstep;
+#if defined(WARPX_DIM_RZ)
+                    auto r = std::sqrt(temp_pos[0] * temp_pos[0] + temp_pos[1] * temp_pos[1]);
+                    // if(r > detector_radius) continue;
+                    xpos.push_back(r);
+                    ypos.push_back(std::atan2(temp_pos[1], temp_pos[0]));
+                    zpos.push_back(temp_pos[2]);
+#else
                     xpos.push_back(temp_pos[0]);
                     ypos.push_back(temp_pos[1]);
                     zpos.push_back(temp_pos[2]);
+#endif
                 }
             }
         }
     }
     // add particles on lev 0 to m_probe
     m_probe.AddNParticles(0, xpos, ypos, zpos);
+
+    // Prev lo
+    // compute move
+    // get a reference to WarpX instance
+    //prob_lo_prev = WarpX::GetInstance().Geom(0).ProbLo()[WarpX::moving_window_dir];
+    auto & warpx = WarpX::GetInstance();
+    prob_lo_prev = warpx.getmoving_window_x();
+
+    if (start_time > 0.0)
+    {
+        int finest_level = WarpX::GetInstance().finestLevel();
+        start_step = static_cast<int>(start_time / WarpX::GetInstance().getdt(finest_level));
+        stop_move_step = start_step;
+    }
 }
 
 void FieldProbe::LoadBalance ()
@@ -387,6 +439,10 @@ void FieldProbe::ComputeDiags (int step)
 
     // get number of mesh-refinement levels
     const auto nLevel = warpx.finestLevel() + 1;
+    //const auto nLevel = warpx.finestLevel() + 1 > max_level + 1 ? max_level + 1 : warpx.finestLevel() + 1;
+
+    m_data_out_level.clear();
+    m_valid_particles_level.clear();
 
     using ablastr::fields::Direction;
 
@@ -396,16 +452,48 @@ void FieldProbe::ComputeDiags (int step)
         amrex::Real const dt = WarpX::GetInstance().getdt(lev);
         // Calculates particle movement in moving window sims
         amrex::Real move_dist = 0.0;
+        const int end_moving_window_step = WarpX::end_moving_window_step >= 0 ? WarpX::end_moving_window_step : INT_MAX;
         bool const update_particles_moving_window =
             do_moving_window_FP &&
             step > WarpX::start_moving_window_step &&
-            step <= WarpX::end_moving_window_step;
+            step <= end_moving_window_step &&
+            step <= stop_move_step;
         if (update_particles_moving_window)
         {
             const int step_diff = step - m_last_compute_step;
             move_dist = dt*WarpX::moving_window_v*step_diff;
-        }
+            if(lev == 0){
+                // // compute move
+                // // get a reference to WarpX instance
+                // const auto prob_lo = WarpX::GetInstance().Geom(0).ProbLo()[WarpX::moving_window_dir];
+                // amrex::Real probe_move = prob_lo - prob_lo_prev;
+                // prob_lo_prev = prob_lo;
 
+                auto & warpx = WarpX::GetInstance();
+                // const int moving_dir = WarpX::moving_window_dir;
+                const auto prob_lo = warpx.getmoving_window_x();
+                amrex::Real probe_move = prob_lo - prob_lo_prev;
+                prob_lo_prev = prob_lo;
+
+                move_dist = probe_move;
+
+                const auto temp_warpx_moving_window = WarpX::moving_window_dir;
+                if (temp_warpx_moving_window == 0)
+                {
+                    x_probe += move_dist;
+                }
+                if (temp_warpx_moving_window == 1)
+                {
+                    y_probe += move_dist;
+                }
+#if defined(WARPX_ZINDEX)
+                if (temp_warpx_moving_window == WARPX_ZINDEX)
+                {
+                    z_probe += move_dist;
+                }
+#endif
+            }
+        }
         // get MultiFab data at lev
         const amrex::MultiFab &Ex = *warpx.m_fields.get(FieldType::Efield_aux, Direction{0}, lev);
         const amrex::MultiFab &Ey = *warpx.m_fields.get(FieldType::Efield_aux, Direction{1}, lev);
@@ -627,6 +715,7 @@ void FieldProbe::ComputeDiags (int step)
                 }
                 // valid particles are counted (for all MPI ranks) to inform output processes as to size of output
                 m_valid_particles = total_data_size / noutputs;
+                m_valid_particles_level[lev] = m_valid_particles;
                 m_data_out.resize(total_data_size, 0);
             }
             // resize receive buffer (resize, initialize 0)
@@ -634,6 +723,8 @@ void FieldProbe::ComputeDiags (int step)
             amrex::ParallelDescriptor::Gatherv(m_data.data(), localsize[0],
                                                m_data_out.data(), length_vector, displs_vector,
                                                amrex::ParallelDescriptor::IOProcessorNumber());
+
+            m_data_out_level[lev] = m_data_out;
         }
     }// end loop over refinement levels
     // make sure data is in m_data on the IOProcessor
@@ -644,53 +735,179 @@ void FieldProbe::ComputeDiags (int step)
 void FieldProbe::WriteToFile (int step) const
 {
     if (!(ProbeInDomain() && amrex::ParallelDescriptor::IOProcessor())) { return; }
+    if (!(step >= start_step - 1 && step <= stop_step)) return;
 
-    // loop over num valid particles to find the lowest particle ID for later sorting
-    auto first_id = static_cast<long int>(m_data_out[0]);
-    for (long int i = 0; i < m_valid_particles; i++)
-    {
-        if (m_data_out[i*noutputs] < first_id) {
-            first_id = static_cast<long int>(m_data_out[i*noutputs]);
+    auto & warpx = WarpX::GetInstance();
+    const auto nLevel = warpx.finestLevel() + 1;
+    // const auto nLevel = warpx.finestLevel() + 1 > max_level + 1 ? max_level + 1 : warpx.finestLevel() + 1;
+    // const auto max_nLevel = nLevel;
+    const auto max_nLevel = 1;
+    for(int cur_lev = 0; cur_lev < max_nLevel; cur_lev++){
+
+        // if(m_valid_particles_level[cur_lev] == 0) continue;
+
+        // open file
+        auto filename = cur_lev > 0 ? m_path + m_rd_name + "_lvl_" + std::to_string(cur_lev) + "." + m_extension:
+            m_path + m_rd_name + "." + m_extension;
+        std::ofstream ofs{filename, std::ofstream::out | std::ofstream::app};
+
+        long np = 0, data_size = 0;
+        // loop over num valid particles to find the lowest particle ID for later sorting
+        auto first_id = LONG_MAX; //static_cast<long int>(m_data_out_level[cur_lev][0]);
+        for(int lev = cur_lev; lev < nLevel; lev++){
+            for (long int i = 0; i < m_valid_particles_level[lev]; i++)
+            {
+                if (m_data_out_level[lev][i*noutputs] < first_id) {
+                    first_id = static_cast<long int>(m_data_out_level[lev][i*noutputs]);
+                }
+            }
+            np += static_cast<long> (m_valid_particles_level[lev]);
+            data_size += m_data_out_level[lev].size();
         }
-    }
+        std::vector<amrex::Real> sorted_data(data_size, 0.0);
+        for(int lev = cur_lev; lev < nLevel; lev++){
+            // Create a new array to store probe data ordered by id, which will be printed to file.
+            // amrex::Vector<amrex::Real> sorted_data;
+            // sorted_data.resize(m_data_out_level[lev].size());
 
-    // Create a new array to store probe data ordered by id, which will be printed to file.
-    amrex::Vector<amrex::Real> sorted_data;
-    sorted_data.resize(m_data_out.size());
-
-    // loop over num valid particles and write data into the appropriately
-    // sorted location
-    for (long int i = 0; i < m_valid_particles; i++)
-    {
-        const long int idx = static_cast<long int>(m_data_out[i*noutputs]) - first_id;
-        for (long int k = 0; k < noutputs; k++)
-        {
-            sorted_data[idx * noutputs + k] = m_data_out[i * noutputs + k];
+            // loop over num valid particles and write data into the appropriately
+            // sorted location
+            for (long int i = 0; i < m_valid_particles_level[lev]; i++)
+            {
+                const long int idx = static_cast<long int>(m_data_out_level[lev][i*noutputs]) - first_id;
+                for (long int k = 0; k < noutputs; k++)
+                {
+                    sorted_data[idx * noutputs + k] = m_data_out_level[lev][i * noutputs + k];
+                    // sorted_data[i * noutputs + k] = m_data_out_level[lev][i * noutputs + k];
+                }
+            }
         }
-    }
+            // // Create a new array to store probe data ordered by id, which will be printed to file.
+            // amrex::Vector<amrex::Real> sorted_data;
+            // sorted_data.resize(m_data_out_level[lev].size());
+            // // push back idx
+            // std::vector<long int> idx_vec(m_valid_particles_level[lev]);
+            // std::iota(idx_vec.begin(), idx_vec.end(), 0);
+            // // sort idx as id number(m_data_out_level[lev][i1*noutputs]) order
+            // std::sort (idx_vec.begin(), idx_vec.end(), [&](int i1,int i2){
+            //     return static_cast<long int>(m_data_out_level[lev][i1*noutputs]) <
+            //         static_cast<long int>(m_data_out_level[lev][i2*noutputs]);
+            // });
+            // // push back data
+            // for (long int i = 0; i < m_valid_particles_level[lev]; i++)
+            // {
+            //     for (long int k = 0; k < noutputs; k++)
+            //     {
+            //         // sorted_data[idx * noutputs + k] = m_data_out_level[lev][i * noutputs + k];
+            //         sorted_data[i * noutputs + k] = m_data_out_level[lev][idx_vec[i] * noutputs + k];
+            //     }
+            // }
 
-    // open file
-    std::ofstream ofs{m_path + m_rd_name + "." + m_extension,
-                        std::ofstream::out | std::ofstream::app};
 
-    // loop over num valid particles and write
-    for (long int i = 0; i < m_valid_particles; i++)
-    {
-        ofs << std::fixed << std::defaultfloat;
-        ofs << step + 1;
-        ofs << m_sep;
-        ofs << std::fixed << std::setprecision(14) << std::scientific;
-        // write time
-        ofs << WarpX::GetInstance().gett_new(0);
-
-        // start at k = 1 since the particle id is not written to file
-        for (int k = 1; k < noutputs; k++)
+        // loop over num valid particles and write
+        for (long int i = 0; i < np; i++)
         {
+            ofs << std::fixed << std::defaultfloat;
+            ofs << step + 1;
             ofs << m_sep;
-            ofs << sorted_data[i * noutputs + k];
+            ofs << std::fixed << std::setprecision(14) << std::scientific;
+            // write time
+            ofs << WarpX::GetInstance().gett_new(0);
+
+            // start at k = 1 since the particle id is not written to file
+            for (long int k = 1; k < noutputs; k++)
+            {
+                ofs << m_sep;
+                ofs << sorted_data[i * noutputs + k];
+            }
+            ofs << std::endl;
+        } // end loop over data size
+        // close file
+        ofs.close();
+        // if(cur_lev == 0) this->WriteToFileOpenPMD(step, sorted_data);
+    }
+}
+
+void FieldProbe::WriteToFileOpenPMD (int step, std::vector<amrex::Real> sorted_data) const
+{
+    // if (!(ProbeInDomain() && amrex::ParallelDescriptor::IOProcessor())) return;
+    // if (!(step >= start_step - 1 && step <= stop_step)) return;
+
+    //m_Series = std::make_unique<openPMD::Series>(m_path + "/" + std::to_string(step) + "/" + m_rd_name + ".h5", openPMD::Access::CREATE);
+    auto m_Series = openPMD::Series(m_path + "/h5dump/" + m_rd_name + "_" + std::to_string(step + 1) + ".h5", openPMD::Access::CREATE);
+
+    // int data_size = sorted_data.size();
+    int np = 0;
+
+    auto & warpx = WarpX::GetInstance();
+    const auto nLevel = warpx.finestLevel() + 1;
+    for(int lev = 0; lev < nLevel; lev++){
+        //np += static_cast<unsigned long> (m_valid_particles_level[lev]);
+        np += static_cast<int> (m_valid_particles_level[lev]);
+    }
+
+    openPMD::Iteration currIteration = m_Series.iterations[step+1];
+    openPMD::ParticleSpecies currSpecies = currIteration.particles["species"];
+    currIteration.setTime(WarpX::GetInstance().gett_new(0));
+
+    const std::shared_ptr<float> curr(
+        new float[np], [](float const *p) { 
+            delete[] p; 
+            p = nullptr;
         }
-        ofs << "\n";
-    } // end loop over data size
-    // close file
-    ofs.close();
+    );
+    openPMD::Datatype dtype = openPMD::determineDatatype(curr);
+    auto d = openPMD::Dataset(dtype, {(uint64_t) np});
+    // std::string options = "{}";
+    // auto realType = openPMD::Dataset(openPMD::determineDatatype<amrex::ParticleReal>(), openPMD::Extent{np}); //, options);
+    // auto idType = openPMD::Dataset(openPMD::determineDatatype<amrex::ParticleReal>(), openPMD::Extent{np}); //, options);
+
+    std::vector<std::string> const positionComponents = {"x", "y", "z"};
+
+    for(auto const& comp : positionComponents) {
+        currSpecies["position"][comp].resetDataset(d);
+        currSpecies["E"][comp].resetDataset(d);
+        currSpecies["B"][comp].resetDataset(d);
+    }
+    // auto const scalar = openPMD::RecordComponent::SCALAR;
+    currSpecies["S"]["S"].resetDataset(d);
+    currSpecies["id"]["id"].resetDataset(d);
+
+    m_Series.flush();
+
+    std::vector<std::string> const components = {"position", "E", "B", "S", "id"};
+
+    for(int idx = 0; idx < components.size(); idx++){
+        if(idx < 3){
+            for (auto currDim = 0; currDim < 3; currDim++) {
+                for (auto i = 0; i < static_cast<int> (np); i++) {
+                    int arg_offset = 1 + idx * 3 + currDim;
+                    curr.get()[i] = static_cast<float> (sorted_data[i * noutputs + arg_offset]);
+                }
+                //unsigned long long offset = 0;
+                uint64_t offset = 0;
+                currSpecies[components[idx]][positionComponents[currDim]]
+                    .storeChunk(curr, openPMD::Offset{offset}, openPMD::Extent{(uint64_t) np});
+                m_Series.flush();
+            }
+        }else{
+            for (int i = 0; i < static_cast<int> (np); i++) {
+                int arg_offset;
+                if(idx == 3){
+                    arg_offset = 10;
+                }else{
+                    arg_offset = 0;
+                }
+                curr.get()[i] = static_cast<float> (sorted_data[i * noutputs + arg_offset]);
+            }
+            // unsigned long long offset = 0;
+            uint64_t offset = 0;
+            currSpecies[components[idx]][components[idx]]
+                .storeChunk(curr, openPMD::Offset{offset}, openPMD::Extent{(uint64_t) np});
+            m_Series.flush();
+        }
+    }
+    m_Series.flush();
+    currIteration.close();
+    m_Series.close();
 }

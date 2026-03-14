@@ -19,6 +19,10 @@
 #include <string>
 #include <vector>
 
+#include <climits>
+#include <openPMD/openPMD.hpp>
+#include <memory>
+
 /**
  * This enumeration is used for assigning structural geometry levels (point vs line vs plane)
  */
@@ -59,6 +63,8 @@ public:
      */
     void ComputeDiags (int step) final;
 
+    void WriteToFileOpenPMD (int step, std::vector<amrex::Real> sorted_data) const;
+
     /*
      * Define constants used throughout FieldProbe
      */
@@ -98,6 +104,13 @@ private:
     //! Empty array to be used by IOProcessor node to store and output data
     amrex::Vector<amrex::Real> m_data_out;
 
+    //!
+    std::vector<amrex::Vector<amrex::Real>> m_data_out_level;
+
+    //! valid particles each level
+    //amrex::Vector<amrex::Real>
+    std::vector<long> m_valid_particles_level;
+
     //! this is the particle container in which probe particles are stored
     FieldProbeParticleContainer m_probe;
 
@@ -106,6 +119,25 @@ private:
 
     //! particle shape used for field gather
     int interp_order = 1;
+
+    // //! timestep where start sample
+    int start_step = 0;
+    amrex::Real start_time = 0.0;
+    
+    // //! timestep where stop sample
+    int stop_step = INT_MAX;
+
+    // //! timestep where fieldprobe stop miving
+    int stop_move_step = INT_MAX;
+
+    // Max refinement level
+    // int max_level = 1;
+
+    //
+    // std::unique_ptr<openPMD::Series> m_Series;
+    // openPMD::Series m_Series;
+
+    amrex::Real prob_lo_prev;
 
     //! Judges whether to follow a moving window
     bool do_moving_window_FP = false;

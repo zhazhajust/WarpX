@@ -57,10 +57,11 @@ Diagnostics::BaseReadParameters ()
         pp_diag_name, "file_min_digits", m_file_min_digits);
     pp_diag_name.query("format", m_format);
     pp_diag_name.query("dump_last_timestep", m_dump_last_timestep);
-
+    pp_diag_name.query("flush_level", flush_level);
     const amrex::ParmParse pp_geometry("geometry");
     std::string dims;
     pp_geometry.get("dims", dims);
+    pp_diag_name.query("flush_level", flush_level);
 
     // use warpx.verbose as global diagnostic verbosity level
     const amrex::ParmParse pp_warpx("warpx");
@@ -532,12 +533,10 @@ Diagnostics::InitBaseData ()
     // current moving_window location
     if (WarpX::do_moving_window) {
         const int moving_dir = WarpX::moving_window_dir;
-        const amrex::Real displacement =
-            warpx.getmoving_window_x() - warpx.Geom(0).ProbLo(moving_dir);
-        const int shift_num_base = static_cast<int>
-            (displacement / warpx.Geom(0).CellSize(moving_dir));
-        m_lo[moving_dir] += shift_num_base * warpx.Geom(0).CellSize(moving_dir);
-        m_hi[moving_dir] += shift_num_base * warpx.Geom(0).CellSize(moving_dir);
+        const int shift_num_base_l = static_cast<int>((warpx.getmoving_window_x() - m_lo[moving_dir]) / warpx.Geom(0).CellSize(moving_dir) );
+        const int shift_num_base_r = static_cast<int>((warpx.getmoving_window_x() - m_hi[moving_dir]) / warpx.Geom(0).CellSize(moving_dir) );
+        m_lo[moving_dir] = warpx.getmoving_window_x() - shift_num_base_l * warpx.Geom(0).CellSize(moving_dir);
+        m_hi[moving_dir] = warpx.getmoving_window_x() - shift_num_base_r * warpx.Geom(0).CellSize(moving_dir);
     }
     // Construct Flush class.
     if        (m_format == "plotfile"){

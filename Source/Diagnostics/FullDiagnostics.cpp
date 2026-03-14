@@ -261,7 +261,7 @@ FullDiagnostics::Flush ( int i_buffer, bool /* force_flush */ )
             m_flush_format->WriteToFile(
                     m_varnames, m_sum_mf_output.at(i_buffer), m_geom_output.at(i_buffer), warpx.getistep(),
                     warpx.gett_new(0),
-                    m_output_species.at(i_buffer), nlev_output, m_file_prefix,
+                    m_output_species.at(i_buffer), std::min(nlev_output, flush_level + 1), m_file_prefix,
                     m_file_min_digits, m_plot_raw_fields, m_plot_raw_fields_guards,
                     m_verbose);
 
