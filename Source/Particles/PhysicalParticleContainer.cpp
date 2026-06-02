@@ -10,6 +10,7 @@
  */
 #include "PhysicalParticleContainer.H"
 
+#include "Diagnostics/FourierRadiation.H"
 #include "Fields.H"
 #include "Filter/NCIGodfreyFilter.H"
 #include "Initialization/PlasmaInjector.H"
@@ -310,6 +311,11 @@ PhysicalParticleContainer::PhysicalParticleContainer (AmrCore* amr_core, int isp
 
     // If old particle positions should be saved add the needed components
     pp_species_name.query("save_previous_position", m_save_previous_position);
+    auto* fourier_radiation = WarpX::GetInstance().GetFourierRadiation();
+    if (fourier_radiation && fourier_radiation->IsSpeciesSelected(species_name)) {
+        m_save_previous_position = true;
+        m_do_fourier_radiation = true;
+    }
     if (m_save_previous_position) {
 #if !defined(WARPX_DIM_1D_Z)
         AddRealComp("prev_x");
@@ -323,6 +329,11 @@ PhysicalParticleContainer::PhysicalParticleContainer (AmrCore* amr_core, int isp
 #if defined(WARPX_DIM_RZ) || defined(WARPX_DIM_RCYLINDER) || defined(WARPX_DIM_RSPHERE)
       amrex::Abort("Saving previous particle positions not yet implemented in RZ");
 #endif
+    }
+    if (m_do_fourier_radiation) {
+        AddRealComp("prev_ux");
+        AddRealComp("prev_uy");
+        AddRealComp("prev_uz");
     }
 
     // Read reflection models for absorbing boundaries; defaults to a zero
@@ -1404,6 +1415,7 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
     ParticleReal* const AMREX_RESTRICT ux = attribs[PIdx::ux].dataPtr() + offset;
     ParticleReal* const AMREX_RESTRICT uy = attribs[PIdx::uy].dataPtr() + offset;
     ParticleReal* const AMREX_RESTRICT uz = attribs[PIdx::uz].dataPtr() + offset;
+    ParticleReal* const AMREX_RESTRICT w = attribs[PIdx::w].dataPtr() + offset;
 
     CopyParticleAttribs copyAttribs;
     if (copy_particle_attribs) {
@@ -1419,6 +1431,9 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
     ParticleReal* x_old = nullptr;
     ParticleReal* y_old = nullptr;
     ParticleReal* z_old = nullptr;
+    ParticleReal* ux_old = nullptr;
+    ParticleReal* uy_old = nullptr;
+    ParticleReal* uz_old = nullptr;
     if (save_previous_position) {
 #if !defined(WARPX_DIM_1D_Z)
         x_old = pti.GetAttribs("prev_x").dataPtr() + offset;
@@ -1431,6 +1446,43 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
 #endif
         amrex::ignore_unused(x_old, y_old, z_old);
     }
+    const bool do_fourier_radiation =
+        m_do_fourier_radiation &&
+        (position_push_type == PositionPushType::Full) &&
+        (momentum_push_type == MomentumPushType::Full);
+    if (do_fourier_radiation) {
+        ux_old = pti.GetAttribs("prev_ux").dataPtr() + offset;
+        uy_old = pti.GetAttribs("prev_uy").dataPtr() + offset;
+        uz_old = pti.GetAttribs("prev_uz").dataPtr() + offset;
+    }
+
+    auto* fourier_radiation = WarpX::GetInstance().GetFourierRadiation();
+    const int radiation_n_omega = (do_fourier_radiation) ? fourier_radiation->NumOmega() : 0;
+    const int radiation_n_theta = (do_fourier_radiation) ? fourier_radiation->NumTheta() : 0;
+    const int radiation_n_total = (do_fourier_radiation) ? fourier_radiation->NumGridNodes() : 0;
+    const Real* const AMREX_RESTRICT radiation_omega =
+        (do_fourier_radiation) ? fourier_radiation->OmegaData() : nullptr;
+    const Real* const AMREX_RESTRICT radiation_sin_theta =
+        (do_fourier_radiation) ? fourier_radiation->SinThetaData() : nullptr;
+    const Real* const AMREX_RESTRICT radiation_cos_theta =
+        (do_fourier_radiation) ? fourier_radiation->CosThetaData() : nullptr;
+    const Real* const AMREX_RESTRICT radiation_sin_phi =
+        (do_fourier_radiation) ? fourier_radiation->SinPhiData() : nullptr;
+    const Real* const AMREX_RESTRICT radiation_cos_phi =
+        (do_fourier_radiation) ? fourier_radiation->CosPhiData() : nullptr;
+    Real* const AMREX_RESTRICT radiation_amp_x_re =
+        (do_fourier_radiation) ? fourier_radiation->AmpXReData() : nullptr;
+    Real* const AMREX_RESTRICT radiation_amp_x_im =
+        (do_fourier_radiation) ? fourier_radiation->AmpXImData() : nullptr;
+    Real* const AMREX_RESTRICT radiation_amp_y_re =
+        (do_fourier_radiation) ? fourier_radiation->AmpYReData() : nullptr;
+    Real* const AMREX_RESTRICT radiation_amp_y_im =
+        (do_fourier_radiation) ? fourier_radiation->AmpYImData() : nullptr;
+    Real* const AMREX_RESTRICT radiation_amp_z_re =
+        (do_fourier_radiation) ? fourier_radiation->AmpZReData() : nullptr;
+    Real* const AMREX_RESTRICT radiation_amp_z_im =
+        (do_fourier_radiation) ? fourier_radiation->AmpZImData() : nullptr;
+    const Real radiation_time = WarpX::GetInstance().gett_new(lev);
 
     // local copies for device lambda capture
     const amrex::ParticleReal q = this->charge;
@@ -1485,6 +1537,11 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
 #if defined(WARPX_ZINDEX)
             z_old[ip] = zp;
 #endif
+        }
+        if (do_fourier_radiation) {
+            ux_old[ip] = ux[ip];
+            uy_old[ip] = uy[ip];
+            uz_old[ip] = uz[ip];
         }
 
         amrex::ParticleReal Exp = Ex_external_particle;
@@ -1544,6 +1601,80 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
         if (position_push_type == PositionPushType::Full) {
             UpdatePosition(xp, yp, zp, ux[ip], uy[ip], uz[ip], dt, mass);
             setPosition(ip, xp, yp, zp);
+        }
+
+        if (do_fourier_radiation) {
+            const Real dt_inv = 1._rt / dt;
+            const Real ux_prev = ux_old[ip];
+            const Real uy_prev = uy_old[ip];
+            const Real uz_prev = uz_old[ip];
+            constexpr Real inv_c = 1._rt / PhysConst::c;
+            const Real gamma_inv_prev = amrex::Math::rsqrt(
+                1._rt + (ux_prev*ux_prev + uy_prev*uy_prev + uz_prev*uz_prev) * inv_c * inv_c);
+            const Real gamma_inv_new = amrex::Math::rsqrt(
+                1._rt + (ux[ip]*ux[ip] + uy[ip]*uy[ip] + uz[ip]*uz[ip]) * inv_c * inv_c);
+
+            const Real betax_prev = ux_prev * inv_c * gamma_inv_prev;
+            const Real betay_prev = uy_prev * inv_c * gamma_inv_prev;
+            const Real betaz_prev = uz_prev * inv_c * gamma_inv_prev;
+            const Real betax_new = ux[ip] * inv_c * gamma_inv_new;
+            const Real betay_new = uy[ip] * inv_c * gamma_inv_new;
+            const Real betaz_new = uz[ip] * inv_c * gamma_inv_new;
+
+            const Real betax = 0.5_rt * (betax_prev + betax_new);
+            const Real betay = 0.5_rt * (betay_prev + betay_new);
+            const Real betaz = 0.5_rt * (betaz_prev + betaz_new);
+            const Real ax = (betax_new - betax_prev) * dt_inv;
+            const Real ay = (betay_new - betay_prev) * dt_inv;
+            const Real az = (betaz_new - betaz_prev) * dt_inv;
+
+            const Real x_mid = 0.5_rt * (x_old[ip] + xp);
+            const Real y_mid = 0.5_rt * (y_old[ip] + yp);
+            const Real z_mid = 0.5_rt * (z_old[ip] + zp);
+
+            for (int gti = 0; gti < radiation_n_total; ++gti) {
+                const int i_phi = gti / (radiation_n_omega * radiation_n_theta);
+                const int i_theta =
+                    (gti - i_phi * radiation_n_omega * radiation_n_theta) / radiation_n_omega;
+                const int i_omega =
+                    gti - i_phi * radiation_n_omega * radiation_n_theta
+                        - i_theta * radiation_n_omega;
+
+                const Real nx = radiation_sin_theta[i_theta] * radiation_cos_phi[i_phi];
+                const Real ny = radiation_sin_theta[i_theta] * radiation_sin_phi[i_phi];
+                const Real nz = radiation_cos_theta[i_theta];
+
+                const Real c2_denom = 1._rt - (betax*nx + betay*ny + betaz*nz);
+                if (amrex::Math::abs(c2_denom) <= std::numeric_limits<Real>::min()) {
+                    continue;
+                }
+
+                const Real c2 = 1._rt / c2_denom;
+                const Real c1 = (ax*nx + ay*ny + az*nz) * c2 * c2;
+                const Real amplitude_x = c1 * (nx - betax) - c2 * ax;
+                const Real amplitude_y = c1 * (ny - betay) - c2 * ay;
+                const Real amplitude_z = c1 * (nz - betaz) - c2 * az;
+
+                const Real phase = radiation_omega[i_omega]
+                    * (radiation_time + 0.5_rt*dt
+                       - (x_mid*nx + y_mid*ny + z_mid*nz) * inv_c);
+                const Real sin_phase = std::sin(phase);
+                const Real cos_phase = std::cos(phase);
+                const Real weight_dt = w[ip] * dt;
+
+                amrex::HostDevice::Atomic::Add(
+                    &radiation_amp_x_re[gti], weight_dt * amplitude_x * cos_phase);
+                amrex::HostDevice::Atomic::Add(
+                    &radiation_amp_x_im[gti], weight_dt * amplitude_x * sin_phase);
+                amrex::HostDevice::Atomic::Add(
+                    &radiation_amp_y_re[gti], weight_dt * amplitude_y * cos_phase);
+                amrex::HostDevice::Atomic::Add(
+                    &radiation_amp_y_im[gti], weight_dt * amplitude_y * sin_phase);
+                amrex::HostDevice::Atomic::Add(
+                    &radiation_amp_z_re[gti], weight_dt * amplitude_z * cos_phase);
+                amrex::HostDevice::Atomic::Add(
+                    &radiation_amp_z_im[gti], weight_dt * amplitude_z * sin_phase);
+            }
         }
 
 #ifdef WARPX_QED

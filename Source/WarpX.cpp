@@ -14,6 +14,7 @@
 #include "BoundaryConditions/FieldBoundaries.H"
 #include "BoundaryConditions/PEC_Insulator.H"
 #include "BoundaryConditions/PML.H"
+#include "Diagnostics/FourierRadiation.H"
 #include "Diagnostics/MultiDiagnostics.H"
 #include "Diagnostics/ReducedDiags/MultiReducedDiags.H"
 #include "EmbeddedBoundary/Enabled.H"
@@ -347,6 +348,7 @@ WarpX::WarpX ()
     t_old.resize(nlevs_max, std::numeric_limits<Real>::lowest());
     dt.resize(nlevs_max, std::numeric_limits<Real>::max());
 
+    m_fourier_radiation = std::make_unique<FourierRadiation>();
     mypc = std::make_unique<MultiParticleContainer>(this);
 
     // Loop over species (particles and lasers)

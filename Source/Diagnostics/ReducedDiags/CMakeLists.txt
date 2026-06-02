@@ -15,6 +15,7 @@ foreach(D IN LISTS WarpX_DIMS)
         FieldProbeParticleContainer.cpp
         FieldReduction.cpp
         FieldProbe.cpp
+        FourierRadiationDiag.cpp
         LoadBalanceCosts.cpp
         LoadBalanceEfficiency.cpp
         MultiReducedDiags.cpp

@@ -17,6 +17,7 @@
 #include "FieldPoyntingFlux.H"
 #include "FieldProbe.H"
 #include "FieldReduction.H"
+#include "FourierRadiationDiag.H"
 #include "LoadBalanceCosts.H"
 #include "LoadBalanceEfficiency.H"
 #include "ParticleEnergy.H"
@@ -72,6 +73,7 @@ MultiReducedDiags::MultiReducedDiags ()
             {"FieldPoyntingFlux",     [](CS s){return std::make_unique<FieldPoyntingFlux>(s);}},
             {"FieldProbe",            [](CS s){return std::make_unique<FieldProbe>(s);}},
             {"FieldReduction",        [](CS s){return std::make_unique<FieldReduction>(s);}},
+            {"FourierRadiation",      [](CS s){return std::make_unique<FourierRadiationDiag>(s);}},
             {"LoadBalanceCosts",      [](CS s){return std::make_unique<LoadBalanceCosts>(s);}},
             {"LoadBalanceEfficiency", [](CS s){return std::make_unique<LoadBalanceEfficiency>(s);}},
             {"RhoMaximum",            [](CS s){return std::make_unique<RhoMaximum>(s);}},
