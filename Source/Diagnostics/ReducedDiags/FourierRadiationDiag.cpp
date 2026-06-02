@@ -23,7 +23,7 @@ FourierRadiationDiag::FourierRadiationDiag (std::string const& rd_name)
 
     if (ParallelDescriptor::IOProcessor() && m_write_header) {
         std::ofstream ofs{m_path + m_rd_name + "." + m_extension, std::ofstream::out};
-        ofs << "# step time omega_index theta_index phi_index intensity\n";
+        ofs << "# step time frequency_index theta_index phi_index d2I_domega_dOmega_SI\n";
     }
 }
 

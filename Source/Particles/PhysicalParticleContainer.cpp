@@ -1660,20 +1660,20 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
                        - (x_mid*nx + y_mid*ny + z_mid*nz) * inv_c);
                 const Real sin_phase = std::sin(phase);
                 const Real cos_phase = std::cos(phase);
-                const Real weight_dt = w[ip] * dt;
+                const Real charge_weight_dt = w[ip] * q * dt;
 
                 amrex::HostDevice::Atomic::Add(
-                    &radiation_amp_x_re[gti], weight_dt * amplitude_x * cos_phase);
+                    &radiation_amp_x_re[gti], charge_weight_dt * amplitude_x * cos_phase);
                 amrex::HostDevice::Atomic::Add(
-                    &radiation_amp_x_im[gti], weight_dt * amplitude_x * sin_phase);
+                    &radiation_amp_x_im[gti], charge_weight_dt * amplitude_x * sin_phase);
                 amrex::HostDevice::Atomic::Add(
-                    &radiation_amp_y_re[gti], weight_dt * amplitude_y * cos_phase);
+                    &radiation_amp_y_re[gti], charge_weight_dt * amplitude_y * cos_phase);
                 amrex::HostDevice::Atomic::Add(
-                    &radiation_amp_y_im[gti], weight_dt * amplitude_y * sin_phase);
+                    &radiation_amp_y_im[gti], charge_weight_dt * amplitude_y * sin_phase);
                 amrex::HostDevice::Atomic::Add(
-                    &radiation_amp_z_re[gti], weight_dt * amplitude_z * cos_phase);
+                    &radiation_amp_z_re[gti], charge_weight_dt * amplitude_z * cos_phase);
                 amrex::HostDevice::Atomic::Add(
-                    &radiation_amp_z_im[gti], weight_dt * amplitude_z * sin_phase);
+                    &radiation_amp_z_im[gti], charge_weight_dt * amplitude_z * sin_phase);
             }
         }
 

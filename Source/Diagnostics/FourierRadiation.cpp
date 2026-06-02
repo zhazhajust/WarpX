@@ -2,6 +2,7 @@
 
 #include "Utils/Parser/ParserUtils.H"
 #include "Utils/TextMsg.H"
+#include "Utils/WarpXConst.H"
 
 #include <AMReX.H>
 #include <AMReX_Gpu.H>
@@ -145,9 +146,12 @@ FourierRadiation::GetIntensity (std::vector<Real>& intensity) const
     ParallelDescriptor::ReduceRealSum(azi.data(), static_cast<int>(azi.size()));
 
     for (int i = 0; i < m_num_grid_nodes; ++i) {
-        intensity[i] = axr[i]*axr[i] + axi[i]*axi[i]
-                     + ayr[i]*ayr[i] + ayi[i]*ayi[i]
-                     + azr[i]*azr[i] + azi[i]*azi[i];
+        constexpr Real prefactor =
+            1._rt / (16._rt * Math::pi<Real>() * Math::pi<Real>() * Math::pi<Real>()
+                     * PhysConst::epsilon_0 * PhysConst::c);
+        intensity[i] = prefactor * (axr[i]*axr[i] + axi[i]*axi[i]
+                                  + ayr[i]*ayr[i] + ayi[i]*ayi[i]
+                                  + azr[i]*azr[i] + azi[i]*azi[i]);
     }
 }
 
