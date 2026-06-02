@@ -14,6 +14,7 @@
 
 #include "BoundaryConditions/PEC_Insulator_fwd.H"
 #include "BoundaryConditions/PML_fwd.H"
+#include "Diagnostics/FourierRadiation_fwd.H"
 #include "Diagnostics/MultiDiagnostics_fwd.H"
 #include "Diagnostics/ReducedDiags/MultiReducedDiags_fwd.H"
 #include "EmbeddedBoundary/WarpXFaceInfoBox_fwd.H"
@@ -155,6 +156,7 @@ public:
     void ImplicitComputeRHSE (int lev, PatchType patch_type, amrex::Real dt, WarpXSolverVec& a_Erhs_vec);
 
     MultiParticleContainer& GetPartContainer () { return *mypc; }
+    FourierRadiation* GetFourierRadiation () { return m_fourier_radiation.get(); }
     MultiFluidContainer& GetFluidContainer () { return *myfl; }
     ElectrostaticSolver& GetElectrostaticSolver () {return *m_electrostatic_solver;}
     [[nodiscard]] HybridPICModel * get_pointer_HybridPICModel () const { return m_hybrid_pic_model.get(); }
@@ -1167,6 +1169,7 @@ private:
 
     // Particle container
     std::unique_ptr<MultiParticleContainer> mypc;
+    std::unique_ptr<FourierRadiation> m_fourier_radiation;
     std::unique_ptr<MultiDiagnostics> multi_diags;
 
     //! Order of finite centering of currents (from nodal grid to staggered grid), along x
