@@ -52,6 +52,10 @@ FourierRadiation::FourierRadiation ()
     m_phi_max = phi_params[1];
     m_num_phi = static_cast<int>(std::llround(phi_params[2]));
     pp_warpx.query("fourier_radiation_omega_grid", m_omega_grid);
+    utils::parser::queryWithParser(
+        pp_warpx, "fourier_radiation_min_particle_energy", m_min_particle_energy);
+    utils::parser::queryWithParser(
+        pp_warpx, "fourier_radiation_particle_fraction", m_particle_fraction);
 
     WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
         m_num_omega > 0 && m_num_theta > 0 && m_num_phi > 0,
@@ -62,6 +66,12 @@ FourierRadiation::FourierRadiation ()
     WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
         m_omega_grid == "linear" || m_omega_grid == "log",
         "warpx.fourier_radiation_omega_grid must be either 'linear' or 'log'.");
+    WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
+        m_min_particle_energy >= 0._rt,
+        "warpx.fourier_radiation_min_particle_energy must be non-negative.");
+    WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
+        m_particle_fraction > 0._rt && m_particle_fraction <= 1._rt,
+        "warpx.fourier_radiation_particle_fraction must be in the interval (0, 1].");
 
     pp_warpx.query("fourier_radiation_reset_after_output", m_reset_after_output);
 
