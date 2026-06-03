@@ -42,9 +42,10 @@ electrons.do_not_deposit = 1
 
 warpx.do_fourier_radiation = 1
 warpx.fourier_radiation_species = electrons
-warpx.fourier_radiation_omega = 1.2e14 3.1e14 39
-warpx.fourier_radiation_theta = 0.0 0.03 7
-warpx.fourier_radiation_phi = 0.0 6.283185307179586 4
+warpx.fourier_radiation_omega = 8.0e13 5.0e14 57
+warpx.fourier_radiation_omega_grid = log
+warpx.fourier_radiation_theta = 0.0 0.06 13
+warpx.fourier_radiation_phi = 0.0 6.283185307179586 8
 
 warpx.reduced_diags_names = rad
 rad.type = FourierRadiation

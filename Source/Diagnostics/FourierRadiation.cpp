@@ -51,6 +51,7 @@ FourierRadiation::FourierRadiation ()
     m_phi_min = phi_params[0];
     m_phi_max = phi_params[1];
     m_num_phi = static_cast<int>(std::llround(phi_params[2]));
+    pp_warpx.query("fourier_radiation_omega_grid", m_omega_grid);
 
     WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
         m_num_omega > 0 && m_num_theta > 0 && m_num_phi > 0,
@@ -58,6 +59,9 @@ FourierRadiation::FourierRadiation ()
     WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
         m_omega_min > 0._rt && m_omega_max > 0._rt,
         "Fourier radiation omega bounds must be positive.");
+    WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
+        m_omega_grid == "linear" || m_omega_grid == "log",
+        "warpx.fourier_radiation_omega_grid must be either 'linear' or 'log'.");
 
     pp_warpx.query("fourier_radiation_reset_after_output", m_reset_after_output);
 
@@ -80,10 +84,17 @@ FourierRadiation::Allocate ()
     Vector<Real> h_cos_theta(m_num_theta);
     Vector<Real> h_sin_phi(m_num_phi);
     Vector<Real> h_cos_phi(m_num_phi);
+    m_frequency.resize(m_num_omega);
 
     for (int i = 0; i < m_num_omega; ++i) {
         Real const frac = (m_num_omega == 1) ? 0._rt : Real(i) / Real(m_num_omega - 1);
-        h_omega[i] = 2._rt * Math::pi<Real>() * (m_omega_min + frac * (m_omega_max - m_omega_min));
+        if (m_omega_grid == "log") {
+            m_frequency[i] = std::exp(
+                std::log(m_omega_min) + frac * (std::log(m_omega_max) - std::log(m_omega_min)));
+        } else {
+            m_frequency[i] = m_omega_min + frac * (m_omega_max - m_omega_min);
+        }
+        h_omega[i] = 2._rt * Math::pi<Real>() * m_frequency[i];
     }
     for (int i = 0; i < m_num_theta; ++i) {
         Real const frac = (m_num_theta == 1) ? 0._rt : Real(i) / Real(m_num_theta - 1);
