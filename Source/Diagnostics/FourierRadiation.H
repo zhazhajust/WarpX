@@ -37,6 +37,7 @@ public:
     [[nodiscard]] int NumPhi () const { return m_num_phi; }
     [[nodiscard]] amrex::Real OmegaMin () const { return m_omega_min; }
     [[nodiscard]] amrex::Real OmegaMax () const { return m_omega_max; }
+    [[nodiscard]] amrex::Real Frequency (int i) const { return m_frequency[i]; }
     [[nodiscard]] amrex::Real ThetaMin () const { return m_theta_min; }
     [[nodiscard]] amrex::Real ThetaMax () const { return m_theta_max; }
     [[nodiscard]] amrex::Real PhiMin () const { return m_phi_min; }
@@ -61,7 +62,9 @@ private:
     amrex::Real m_theta_max = 0.0;
     amrex::Real m_phi_min = 0.0;
     amrex::Real m_phi_max = 0.0;
+    std::string m_omega_grid = "linear";
 
+    std::vector<amrex::Real> m_frequency;
     amrex::Gpu::DeviceVector<amrex::Real> m_omega_2pi;
     amrex::Gpu::DeviceVector<amrex::Real> m_sin_theta;
     amrex::Gpu::DeviceVector<amrex::Real> m_cos_theta;

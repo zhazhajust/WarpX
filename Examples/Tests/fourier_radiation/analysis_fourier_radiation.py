@@ -5,21 +5,35 @@ import sys
 from pathlib import Path
 
 
+def read_input_grid_bounds(path, name):
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, values = line.split("=", 1)
+        if key.strip() == name:
+            values = values.split("#", 1)[0]
+            parts = [float(v) for v in values.split()]
+            if len(parts) != 3:
+                raise RuntimeError(f"Unexpected grid specification for {name}: {line}")
+            return parts[0], parts[1]
+    raise RuntimeError(f"Could not find {name} in {path}")
+
+
 def save_energy_spread_beam_slice(final_rows):
-    nfreq = 39
-    ntheta = 7
-    nphi = 4
-    freq_min = 1.2e14
-    freq_max = 3.1e14
-    theta_min = 0.0
-    theta_max = 0.03
+    nfreq = max(int(row[2]) for row in final_rows) + 1
+    ntheta = max(int(row[4]) for row in final_rows) + 1
+    theta_min, theta_max = read_input_grid_bounds(
+        Path("warpx_used_inputs"), "warpx.fourier_radiation_theta")
     phi_index = 0
 
     intensity_slice = [[0.0 for _ in range(nfreq)] for _ in range(ntheta)]
+    frequency = [0.0 for _ in range(nfreq)]
     for row in final_rows:
         iomega = int(row[2])
-        itheta = int(row[3])
-        iphi = int(row[4])
+        frequency[iomega] = row[3]
+        itheta = int(row[4])
+        iphi = int(row[5])
         if iphi == phi_index:
             intensity_slice[itheta][iomega] = row[-1]
 
@@ -60,6 +74,8 @@ def save_energy_spread_beam_slice(final_rows):
         2.0 * (1.0 + uz * uz) * c / lambda_u / (1.0 + 0.5 * k_undulator**2)
         for uz in (18.0, 19.0, 20.0, 21.0, 22.0)
     ]
+    freq_min = min(frequency)
+    freq_max = max(frequency)
 
     width = 760
     height = 460
@@ -69,8 +85,13 @@ def save_energy_spread_beam_slice(final_rows):
     bottom = 72
     plot_width = width - left - right
     plot_height = height - top - bottom
-    cell_width = plot_width / nfreq
     cell_height = plot_height / ntheta
+    log_freq_min = math.log10(freq_min)
+    log_freq_max = math.log10(freq_max)
+
+    def frequency_x(freq):
+        return left + (math.log10(freq) - log_freq_min) / (log_freq_max - log_freq_min) * plot_width
+
     svg = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
         f'viewBox="0 0 {width} {height}">',
@@ -82,14 +103,21 @@ def save_energy_spread_beam_slice(final_rows):
     ]
     for itheta, row in enumerate(log_slice):
         for iomega, value in enumerate(row):
-            x = left + iomega * cell_width
+            if iomega == 0:
+                x0 = left
+            else:
+                x0 = 0.5 * (frequency_x(frequency[iomega - 1]) + frequency_x(frequency[iomega]))
+            if iomega == nfreq - 1:
+                x1 = left + plot_width
+            else:
+                x1 = 0.5 * (frequency_x(frequency[iomega]) + frequency_x(frequency[iomega + 1]))
             y = top + (ntheta - 1 - itheta) * cell_height
             svg.append(
-                f'<rect x="{x:.3f}" y="{y:.3f}" width="{cell_width + 0.4:.3f}" '
+                f'<rect x="{x0:.3f}" y="{y:.3f}" width="{x1 - x0 + 0.4:.3f}" '
                 f'height="{cell_height + 0.4:.3f}" fill="{color(value)}"/>'
             )
     for expected_freq in expected_freqs:
-        x = left + (expected_freq - freq_min) / (freq_max - freq_min) * plot_width
+        x = frequency_x(expected_freq)
         if left <= x <= left + plot_width:
             svg.append(
                 f'<line x1="{x:.3f}" y1="{top}" x2="{x:.3f}" y2="{top + plot_height}" '
@@ -114,7 +142,7 @@ def save_energy_spread_beam_slice(final_rows):
     for tick in range(5):
         frac = tick / 4.0
         x = left + frac * plot_width
-        freq = freq_min * 1.0e-14 + frac * (freq_max - freq_min) * 1.0e-14
+        freq = 10.0 ** (log_freq_min + frac * (log_freq_max - log_freq_min)) * 1.0e-14
         svg.append(
             f'<line x1="{x:.3f}" y1="{top + plot_height}" '
             f'x2="{x:.3f}" y2="{top + plot_height + 5}" stroke="#111827"/>'
@@ -187,7 +215,7 @@ def main():
             if not line or line.startswith("#"):
                 continue
             values = [float(v) for v in line.split()]
-            if len(values) != 6:
+            if len(values) != 7:
                 raise RuntimeError(f"Unexpected Fourier radiation row: {line}")
             rows.append(values)
 
@@ -211,11 +239,8 @@ def main():
         assert all(value >= 0.0 for value in intensity), intensity
         assert max(intensity) > 0.0, intensity
 
-        nfreq = 31
-        freq_min = 1.5e14
-        freq_max = 3.3e14
         peak_index = max(range(len(intensity)), key=lambda i: intensity[i])
-        peak_freq = freq_min + (freq_max - freq_min) * peak_index / (nfreq - 1)
+        peak_freq = final_rows[peak_index][3]
 
         c = 299792458.0
         qe = 1.602176634e-19
@@ -239,27 +264,27 @@ def main():
         final_step = max(row[0] for row in rows)
         final_rows = [row for row in rows if row[0] == final_step]
 
-        nfreq = 39
-        ntheta = 7
-        nphi = 4
-        freq_min = 1.2e14
-        freq_max = 3.1e14
+        nfreq = max(int(row[2]) for row in final_rows) + 1
+        ntheta = max(int(row[4]) for row in final_rows) + 1
+        nphi = max(int(row[5]) for row in final_rows) + 1
         expected_rows = nfreq * ntheta * nphi
         assert len(final_rows) == expected_rows, (len(final_rows), expected_rows)
 
         spectrum = [0.0] * nfreq
+        frequency = [0.0] * nfreq
         angular = [0.0] * (ntheta * nphi)
         for row in final_rows:
             iomega = int(row[2])
-            itheta = int(row[3])
-            iphi = int(row[4])
+            frequency[iomega] = row[3]
+            itheta = int(row[4])
+            iphi = int(row[5])
             value = row[-1]
             assert value >= 0.0, value
             spectrum[iomega] += value
             angular[itheta + ntheta * iphi] += value
 
         peak_index = max(range(nfreq), key=lambda i: spectrum[i])
-        peak_freq = freq_min + (freq_max - freq_min) * peak_index / (nfreq - 1)
+        peak_freq = frequency[peak_index]
         assert max(spectrum) > 0.0, spectrum
 
         c = 299792458.0

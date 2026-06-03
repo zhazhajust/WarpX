@@ -23,7 +23,8 @@ FourierRadiationDiag::FourierRadiationDiag (std::string const& rd_name)
 
     if (ParallelDescriptor::IOProcessor() && m_write_header) {
         std::ofstream ofs{m_path + m_rd_name + "." + m_extension, std::ofstream::out};
-        ofs << "# step time frequency_index theta_index phi_index d2I_domega_dOmega_SI\n";
+        ofs << "# step time frequency_index frequency_Hz theta_index phi_index "
+               "d2I_domega_dOmega_SI\n";
     }
 }
 
@@ -61,8 +62,8 @@ FourierRadiationDiag::WriteToFile (int step) const
                 for (int iomega = 0; iomega < n_omega; ++iomega) {
                     int const idx = iomega + n_omega * (itheta + n_theta * iphi);
                     ofs << step+1 << m_sep << time << m_sep
-                        << iomega << m_sep << itheta << m_sep << iphi << m_sep
-                        << m_data[idx] << "\n";
+                        << iomega << m_sep << radiation->Frequency(iomega) << m_sep
+                        << itheta << m_sep << iphi << m_sep << m_data[idx] << "\n";
                 }
             }
         }
