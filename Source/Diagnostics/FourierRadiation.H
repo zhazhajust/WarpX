@@ -5,6 +5,7 @@
 #include <AMReX_Parser.H>
 #include <AMReX_REAL.H>
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -72,6 +73,7 @@ private:
     amrex::Real m_particle_fraction = 1.0;
     bool m_do_particle_filter = false;
     std::string m_omega_grid = "linear";
+    std::unique_ptr<amrex::Parser> m_particle_filter_parser;
     amrex::ParserExecutor<8> m_particle_filter_function;
 
     std::vector<amrex::Real> m_frequency;

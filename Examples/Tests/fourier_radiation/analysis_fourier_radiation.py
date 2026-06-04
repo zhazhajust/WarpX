@@ -23,8 +23,7 @@ def read_input_grid_bounds(path, name):
 def save_energy_spread_beam_slice(final_rows):
     nfreq = max(int(row[2]) for row in final_rows) + 1
     ntheta = max(int(row[4]) for row in final_rows) + 1
-    theta_min, theta_max = read_input_grid_bounds(
-        Path("warpx_used_inputs"), "warpx.fourier_radiation_theta")
+    theta_min, theta_max = read_input_grid_bounds(Path("warpx_used_inputs"), "rad.theta")
     phi_index = 0
 
     intensity_slice = [[0.0 for _ in range(nfreq)] for _ in range(ntheta)]
@@ -232,38 +231,9 @@ def main():
     elif case == "filtered":
         final_step = max(row[0] for row in rows)
         final_rows = [row for row in rows if row[0] == final_step]
-        assert all(row[-1] == 0.0 for row in final_rows), final_rows
+        assert max(row[-1] for row in final_rows) > 0.0, final_rows
     elif case == "uniform":
         assert final_intensity == 0.0, final_intensity
-    elif case == "undulator":
-        final_step = max(row[0] for row in rows)
-        final_rows = [row for row in rows if row[0] == final_step]
-        intensity = [row[-1] for row in final_rows]
-
-        assert all(value >= 0.0 for value in intensity), intensity
-        assert max(intensity) > 0.0, intensity
-
-        peak_index = max(range(len(intensity)), key=lambda i: intensity[i])
-        peak_freq = final_rows[peak_index][3]
-
-        c = 299792458.0
-        qe = 1.602176634e-19
-        me = 9.1093837139e-31
-        gamma = (1.0 + 20.0**2) ** 0.5
-        lambda_u = 1.0e-3
-        b0 = 0.05715
-        pi = 3.141592653589793
-        k_undulator = qe * b0 * lambda_u / (2.0 * pi * me * c)
-        expected_freq = (
-            2.0
-            * gamma**2
-            * c
-            / lambda_u
-            / (1.0 + 0.5 * k_undulator**2)
-        )
-
-        relative_error = abs(peak_freq - expected_freq) / expected_freq
-        assert relative_error < 0.04, (peak_freq, expected_freq, relative_error)
     elif case == "energy_spread_beam":
         final_step = max(row[0] for row in rows)
         final_rows = [row for row in rows if row[0] == final_step]
@@ -306,6 +276,17 @@ def main():
             peak_freq,
             expected_freqs,
         )
+
+        max_spectrum = max(spectrum)
+        for expected_freq in expected_freqs:
+            nearest_index = min(
+                range(nfreq), key=lambda i: abs(math.log(frequency[i] / expected_freq))
+            )
+            relative_error = abs(frequency[nearest_index] - expected_freq) / expected_freq
+            assert relative_error < 0.04, (frequency[nearest_index], expected_freq, relative_error)
+            window = range(max(0, nearest_index - 1), min(nfreq, nearest_index + 2))
+            local_peak = max(spectrum[i] for i in window)
+            assert local_peak > 0.5 * max_spectrum, (expected_freq, local_peak, max_spectrum)
 
         nonzero_angles = sum(value > 0.01 * max(angular) for value in angular)
         assert nonzero_angles > 1, angular

@@ -17,7 +17,8 @@ FourierRadiationDiag::FourierRadiationDiag (std::string const& rd_name)
     auto const* radiation = WarpX::GetInstance().GetFourierRadiation();
     WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
         radiation != nullptr && radiation->Enabled(),
-        "FourierRadiation reduced diagnostic requires warpx.do_fourier_radiation = 1.");
+        "FourierRadiation reduced diagnostic was not initialized. Check "
+        + rd_name + ".species/frequencies/theta/phi.");
 
     m_data.resize(radiation->NumGridNodes(), 0._rt);
 
