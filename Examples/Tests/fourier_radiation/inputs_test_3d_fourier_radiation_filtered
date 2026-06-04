@@ -44,3 +44,4 @@ rad.frequencies = 1.5e14 3.3e14 31
 rad.theta = 0.0 0.0 1
 rad.phi = 0.0 0.0 1
 rad.filter_function(t,x,y,z,ux,uy,uz,w) = "sqrt(ux*ux + uy*uy + uz*uz) > 10"
+rad.filter_mode = latched

@@ -46,6 +46,7 @@ public:
     [[nodiscard]] amrex::Real PhiMax () const { return m_phi_max; }
     [[nodiscard]] bool ResetAfterOutput () const { return m_reset_after_output; }
     [[nodiscard]] bool DoParticleFilter () const { return m_do_particle_filter; }
+    [[nodiscard]] bool ParticleFilterIsLatched () const { return m_particle_filter_is_latched; }
     [[nodiscard]] amrex::ParserExecutor<8> ParticleFilterFunction () const
     {
         return m_particle_filter_function;
@@ -72,6 +73,7 @@ private:
     amrex::Real m_phi_max = 0.0;
     amrex::Real m_particle_fraction = 1.0;
     bool m_do_particle_filter = false;
+    bool m_particle_filter_is_latched = false;
     std::string m_omega_grid = "linear";
     std::unique_ptr<amrex::Parser> m_particle_filter_parser;
     amrex::ParserExecutor<8> m_particle_filter_function;

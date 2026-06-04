@@ -267,6 +267,24 @@ void DefaultInitializeRuntimeAttributes (PTile& ptile,
                 }
             }
 
+            auto const it_fourier_rad_tracked = std::find(
+                particle_icomps.begin(), particle_icomps.end(), "fourier_radiation_tracked");
+            if (it_fourier_rad_tracked != particle_icomps.end() &&
+                std::distance(particle_icomps.begin(), it_fourier_rad_tracked) == j)
+            {
+                if (run_on_gpu) {
+                    amrex::ParallelFor(stop - start,
+                                       [=] AMREX_GPU_DEVICE (int i) noexcept {
+                                           const int ip = i + start;
+                                           attr_ptr[ip] = 0;
+                                       });
+                } else {
+                    for (int ip = start; ip < stop; ++ip) {
+                        attr_ptr[ip] = 0;
+                    }
+                }
+            }
+
             for (int ia = 0; ia < n_user_int_attribs; ++ia)
             {
                 // Current runtime comp is ia-th user defined attribute

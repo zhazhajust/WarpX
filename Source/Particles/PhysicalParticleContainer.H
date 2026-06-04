@@ -498,6 +498,7 @@ protected:
 
     // A flag to enable inline Fourier radiation for this species
     bool m_do_fourier_radiation = false;
+    bool m_fourier_radiation_filter_is_latched = false;
 
     // Flag controlling whether or not variance and then temperatures are computed per species
     bool m_do_temperature_deposition = false;

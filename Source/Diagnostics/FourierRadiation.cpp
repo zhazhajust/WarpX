@@ -72,6 +72,9 @@ FourierRadiation::FourierRadiation ()
     m_num_phi = static_cast<int>(std::llround(phi_params[2]));
     pp_fr.query("frequency_grid", m_omega_grid);
     utils::parser::queryWithParser(pp_fr, "particle_fraction", m_particle_fraction);
+    std::string particle_filter_mode = "step";
+    pp_fr.query("filter_mode", particle_filter_mode);
+    m_particle_filter_is_latched = particle_filter_mode == "latched";
     std::string particle_filter_string;
     m_do_particle_filter = pp_fr.query(
         "filter_function(t,x,y,z,ux,uy,uz,w)", particle_filter_string);
@@ -95,6 +98,12 @@ FourierRadiation::FourierRadiation ()
     WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
         m_omega_grid == "linear" || m_omega_grid == "log",
         rd_name + ".frequency_grid must be either 'linear' or 'log'.");
+    WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
+        particle_filter_mode == "step" || particle_filter_mode == "latched",
+        rd_name + ".filter_mode must be either 'step' or 'latched'.");
+    WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
+        !m_particle_filter_is_latched || m_do_particle_filter,
+        rd_name + ".filter_mode = latched requires a filter_function.");
     WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
         m_particle_fraction > 0._rt && m_particle_fraction <= 1._rt,
         rd_name + ".particle_fraction must be in the interval (0, 1].");
