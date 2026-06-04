@@ -43,8 +43,6 @@ public:
     [[nodiscard]] amrex::Real PhiMin () const { return m_phi_min; }
     [[nodiscard]] amrex::Real PhiMax () const { return m_phi_max; }
     [[nodiscard]] bool ResetAfterOutput () const { return m_reset_after_output; }
-    [[nodiscard]] amrex::Real MinParticleEnergy () const { return m_min_particle_energy; }
-    [[nodiscard]] amrex::Real ParticleFraction () const { return m_particle_fraction; }
 
 private:
     void Allocate ();
@@ -64,8 +62,6 @@ private:
     amrex::Real m_theta_max = 0.0;
     amrex::Real m_phi_min = 0.0;
     amrex::Real m_phi_max = 0.0;
-    amrex::Real m_min_particle_energy = 0.0;
-    amrex::Real m_particle_fraction = 1.0;
     std::string m_omega_grid = "linear";
 
     std::vector<amrex::Real> m_frequency;

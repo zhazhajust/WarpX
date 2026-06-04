@@ -39,13 +39,16 @@ def save_energy_spread_beam_slice(final_rows):
 
     max_intensity = max(max(row) for row in intensity_slice)
     assert max_intensity > 0.0, intensity_slice
-    normalized_slice = [
-        [value / max_intensity for value in row]
+    log_slice = [
+        [
+            -12.0 if value <= 0.0 else max(-12.0, math.log10(value / max_intensity))
+            for value in row
+        ]
         for row in intensity_slice
     ]
 
     def color(value):
-        t = min(1.0, max(0.0, value))
+        t = min(1.0, max(0.0, (value + 12.0) / 12.0))
         stops = (
             (15, 23, 42),
             (37, 99, 235),
@@ -98,7 +101,7 @@ def save_energy_spread_beam_slice(final_rows):
             'font-size="17">Fourier radiation energy-spread beam, phi index 0</text>'
         ),
     ]
-    for itheta, row in enumerate(normalized_slice):
+    for itheta, row in enumerate(log_slice):
         for iomega, value in enumerate(row):
             if iomega == 0:
                 x0 = left
@@ -166,7 +169,7 @@ def save_energy_spread_beam_slice(final_rows):
     )
     svg.append(
         '<text x="615" y="438" font-family="sans-serif" font-size="12" fill="#374151">'
-        'color: normalized intensity</text>'
+        'color: log10(normalized intensity)</text>'
     )
     svg.append("</svg>")
     Path("fourier_radiation_energy_spread_beam_phi0.svg").write_text("\n".join(svg) + "\n")
@@ -181,19 +184,19 @@ def save_energy_spread_beam_slice(final_rows):
 
     fig, ax = plt.subplots(figsize=(7.0, 4.2))
     image = ax.imshow(
-        normalized_slice,
+        log_slice,
         aspect="auto",
         extent=[freq_min * 1.0e-14, freq_max * 1.0e-14, theta_min, theta_max],
         origin="lower",
         cmap="viridis",
-        vmin=0.0,
-        vmax=1.0,
+        vmin=-12.0,
+        vmax=0.0,
     )
     ax.set_xlabel("frequency [1e14 Hz]")
     ax.set_ylabel("theta [rad]")
     ax.set_title("Fourier radiation energy-spread beam, phi index 0")
     cbar = fig.colorbar(image, ax=ax)
-    cbar.set_label("normalized intensity")
+    cbar.set_label("log10(normalized intensity)")
     fig.tight_layout()
     fig.savefig("fourier_radiation_energy_spread_beam_phi0.png", dpi=200)
     plt.close(fig)
@@ -226,8 +229,6 @@ def main():
     final_intensity = intensity[-1]
     if case == "accelerated":
         assert final_intensity > 0.0, final_intensity
-    elif case == "filtered":
-        assert final_intensity == 0.0, final_intensity
     elif case == "uniform":
         assert final_intensity == 0.0, final_intensity
     elif case == "undulator":
