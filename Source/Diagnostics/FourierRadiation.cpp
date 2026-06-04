@@ -20,51 +20,70 @@ using namespace amrex;
 FourierRadiation::FourierRadiation ()
 {
     ParmParse const pp_warpx("warpx");
-    pp_warpx.query("do_fourier_radiation", m_enabled);
-    if (!m_enabled) {
+    Vector<std::string> rd_names;
+    pp_warpx.queryarr("reduced_diags_names", rd_names);
+
+    std::string rd_name;
+    int num_fourier_radiation_diags = 0;
+    for (auto const& name : rd_names) {
+        ParmParse const pp_rd(name);
+        std::string rd_type;
+        if (pp_rd.query("type", rd_type) && rd_type == "FourierRadiation") {
+            rd_name = name;
+            ++num_fourier_radiation_diags;
+        }
+    }
+
+    WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
+        num_fourier_radiation_diags <= 1,
+        "Only one FourierRadiation reduced diagnostic is currently supported.");
+
+    if (num_fourier_radiation_diags == 0) {
         return;
     }
+    m_enabled = true;
 
 #if !defined(WARPX_DIM_3D)
     WARPX_ABORT_WITH_MESSAGE("Inline Fourier radiation is currently implemented only for 3D.");
 #endif
 
-    pp_warpx.get("fourier_radiation_species", m_species_name);
+    ParmParse const pp_fr(rd_name);
+    pp_fr.get("species", m_species_name);
 
-    Vector<Real> omega_params;
+    Vector<Real> frequency_params;
     Vector<Real> theta_params;
     Vector<Real> phi_params;
-    utils::parser::getArrWithParser(pp_warpx, "fourier_radiation_omega", omega_params);
-    utils::parser::getArrWithParser(pp_warpx, "fourier_radiation_theta", theta_params);
-    utils::parser::getArrWithParser(pp_warpx, "fourier_radiation_phi", phi_params);
+    utils::parser::getArrWithParser(pp_fr, "frequencies", frequency_params);
+    utils::parser::getArrWithParser(pp_fr, "theta", theta_params);
+    utils::parser::getArrWithParser(pp_fr, "phi", phi_params);
 
     WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
-        omega_params.size() == 3 && theta_params.size() == 3 && phi_params.size() == 3,
-        "warpx.fourier_radiation_omega/theta/phi must each be: min max num_points.");
+        frequency_params.size() == 3 && theta_params.size() == 3 && phi_params.size() == 3,
+        rd_name + ".frequencies/theta/phi must each be: min max num_points.");
 
-    m_omega_min = omega_params[0];
-    m_omega_max = omega_params[1];
-    m_num_omega = static_cast<int>(std::llround(omega_params[2]));
+    m_omega_min = frequency_params[0];
+    m_omega_max = frequency_params[1];
+    m_num_omega = static_cast<int>(std::llround(frequency_params[2]));
     m_theta_min = theta_params[0];
     m_theta_max = theta_params[1];
     m_num_theta = static_cast<int>(std::llround(theta_params[2]));
     m_phi_min = phi_params[0];
     m_phi_max = phi_params[1];
     m_num_phi = static_cast<int>(std::llround(phi_params[2]));
-    pp_warpx.query("fourier_radiation_omega_grid", m_omega_grid);
-    utils::parser::queryWithParser(
-        pp_warpx, "fourier_radiation_particle_fraction", m_particle_fraction);
+    pp_fr.query("frequency_grid", m_omega_grid);
+    utils::parser::queryWithParser(pp_fr, "particle_fraction", m_particle_fraction);
     std::string particle_filter_string;
-    m_do_particle_filter = pp_warpx.query(
-        "fourier_radiation_filter_function(t,x,y,z,ux,uy,uz,w)", particle_filter_string);
+    m_do_particle_filter = pp_fr.query(
+        "filter_function(t,x,y,z,ux,uy,uz,w)", particle_filter_string);
     if (m_do_particle_filter) {
         utils::parser::Store_parserString(
-            pp_warpx,
-            "fourier_radiation_filter_function(t,x,y,z,ux,uy,uz,w)",
+            pp_fr,
+            "filter_function(t,x,y,z,ux,uy,uz,w)",
             particle_filter_string);
-        amrex::Parser particle_filter_parser = utils::parser::makeParser(
-            particle_filter_string, {"t", "x", "y", "z", "ux", "uy", "uz", "w"});
-        m_particle_filter_function = particle_filter_parser.compile<8>();
+        m_particle_filter_parser = std::make_unique<amrex::Parser>(
+            utils::parser::makeParser(
+                particle_filter_string, {"t", "x", "y", "z", "ux", "uy", "uz", "w"}));
+        m_particle_filter_function = m_particle_filter_parser->compile<8>();
     }
 
     WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
@@ -72,15 +91,15 @@ FourierRadiation::FourierRadiation ()
         "Fourier radiation grid dimensions must be positive.");
     WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
         m_omega_min > 0._rt && m_omega_max > 0._rt,
-        "Fourier radiation omega bounds must be positive.");
+        rd_name + ".frequencies bounds must be positive.");
     WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
         m_omega_grid == "linear" || m_omega_grid == "log",
-        "warpx.fourier_radiation_omega_grid must be either 'linear' or 'log'.");
+        rd_name + ".frequency_grid must be either 'linear' or 'log'.");
     WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
         m_particle_fraction > 0._rt && m_particle_fraction <= 1._rt,
-        "warpx.fourier_radiation_particle_fraction must be in the interval (0, 1].");
+        rd_name + ".particle_fraction must be in the interval (0, 1].");
 
-    pp_warpx.query("fourier_radiation_reset_after_output", m_reset_after_output);
+    pp_fr.query("reset_after_output", m_reset_after_output);
 
     Allocate();
 }
