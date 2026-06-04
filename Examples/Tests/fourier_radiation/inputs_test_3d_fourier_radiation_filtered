@@ -1,0 +1,53 @@
+max_step = 400
+
+amr.n_cell = 8 8 8
+amr.max_level = 0
+amr.blocking_factor = 8
+amr.max_grid_size = 8
+
+geometry.dims = 3
+geometry.prob_lo = -1.0e-3 -1.0e-3 -1.0e-3
+geometry.prob_hi =  1.0e-3  1.0e-3  1.0e-2
+
+boundary.field_lo = periodic periodic periodic
+boundary.field_hi = periodic periodic periodic
+boundary.particle_lo = periodic periodic periodic
+boundary.particle_hi = periodic periodic periodic
+
+algo.charge_deposition = standard
+algo.current_deposition = direct
+algo.field_gathering = energy-conserving
+algo.particle_shape = 1
+
+warpx.const_dt = 4.170e-14
+warpx.use_filter = 0
+
+particles.species_names = electrons
+particles.B_ext_particle_init_style = parse_b_ext_particle_function
+particles.Bx_external_particle_function(x,y,z,t) = 0.0
+particles.By_external_particle_function(x,y,z,t) = "0.05715 * sin(2*pi*z/1.0e-3)"
+particles.Bz_external_particle_function(x,y,z,t) = 0.0
+
+electrons.charge = -q_e
+electrons.mass = m_e
+electrons.injection_style = "MultipleParticles"
+electrons.multiple_particles_pos_x = 0.0 0.0 0.0 0.0 0.0
+electrons.multiple_particles_pos_y = 0.0 0.0 0.0 0.0 0.0
+electrons.multiple_particles_pos_z = 0.0 0.0 0.0 0.0 0.0
+electrons.multiple_particles_ux = 0.0 0.0 0.0 0.0 0.0
+electrons.multiple_particles_uy = 0.0 0.0 0.0 0.0 0.0
+electrons.multiple_particles_uz = 18.0 19.0 20.0 21.0 22.0
+electrons.multiple_particles_weight = 1.0 1.0 1.0 1.0 1.0
+electrons.do_not_deposit = 1
+
+warpx.do_fourier_radiation = 1
+warpx.fourier_radiation_species = electrons
+warpx.fourier_radiation_omega = 8.0e13 5.0e14 57
+warpx.fourier_radiation_omega_grid = log
+warpx.fourier_radiation_theta = 0.0 0.06 13
+warpx.fourier_radiation_phi = 0.0 6.283185307179586 8
+warpx.fourier_radiation_filter_function(t,x,y,z,ux,uy,uz,w) = "sqrt(ux**2 + uy**2 + uz**2) > 30"
+
+warpx.reduced_diags_names = rad
+rad.type = FourierRadiation
+rad.intervals = 400

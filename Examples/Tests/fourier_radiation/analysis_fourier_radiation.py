@@ -229,6 +229,10 @@ def main():
     final_intensity = intensity[-1]
     if case == "accelerated":
         assert final_intensity > 0.0, final_intensity
+    elif case == "filtered":
+        final_step = max(row[0] for row in rows)
+        final_rows = [row for row in rows if row[0] == final_step]
+        assert all(row[-1] == 0.0 for row in final_rows), final_rows
     elif case == "uniform":
         assert final_intensity == 0.0, final_intensity
     elif case == "undulator":

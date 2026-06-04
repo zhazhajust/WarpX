@@ -2,6 +2,7 @@
 #define WARPX_DIAGNOSTICS_FOURIERRADIATION_H_
 
 #include <AMReX_GpuContainers.H>
+#include <AMReX_Parser.H>
 #include <AMReX_REAL.H>
 
 #include <string>
@@ -43,6 +44,12 @@ public:
     [[nodiscard]] amrex::Real PhiMin () const { return m_phi_min; }
     [[nodiscard]] amrex::Real PhiMax () const { return m_phi_max; }
     [[nodiscard]] bool ResetAfterOutput () const { return m_reset_after_output; }
+    [[nodiscard]] bool DoParticleFilter () const { return m_do_particle_filter; }
+    [[nodiscard]] amrex::ParserExecutor<8> ParticleFilterFunction () const
+    {
+        return m_particle_filter_function;
+    }
+    [[nodiscard]] amrex::Real ParticleFraction () const { return m_particle_fraction; }
 
 private:
     void Allocate ();
@@ -62,7 +69,10 @@ private:
     amrex::Real m_theta_max = 0.0;
     amrex::Real m_phi_min = 0.0;
     amrex::Real m_phi_max = 0.0;
+    amrex::Real m_particle_fraction = 1.0;
+    bool m_do_particle_filter = false;
     std::string m_omega_grid = "linear";
+    amrex::ParserExecutor<8> m_particle_filter_function;
 
     std::vector<amrex::Real> m_frequency;
     amrex::Gpu::DeviceVector<amrex::Real> m_omega_2pi;

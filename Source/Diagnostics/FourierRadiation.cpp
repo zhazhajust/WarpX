@@ -52,6 +52,20 @@ FourierRadiation::FourierRadiation ()
     m_phi_max = phi_params[1];
     m_num_phi = static_cast<int>(std::llround(phi_params[2]));
     pp_warpx.query("fourier_radiation_omega_grid", m_omega_grid);
+    utils::parser::queryWithParser(
+        pp_warpx, "fourier_radiation_particle_fraction", m_particle_fraction);
+    std::string particle_filter_string;
+    m_do_particle_filter = pp_warpx.query(
+        "fourier_radiation_filter_function(t,x,y,z,ux,uy,uz,w)", particle_filter_string);
+    if (m_do_particle_filter) {
+        utils::parser::Store_parserString(
+            pp_warpx,
+            "fourier_radiation_filter_function(t,x,y,z,ux,uy,uz,w)",
+            particle_filter_string);
+        amrex::Parser particle_filter_parser = utils::parser::makeParser(
+            particle_filter_string, {"t", "x", "y", "z", "ux", "uy", "uz", "w"});
+        m_particle_filter_function = particle_filter_parser.compile<8>();
+    }
 
     WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
         m_num_omega > 0 && m_num_theta > 0 && m_num_phi > 0,
@@ -62,6 +76,9 @@ FourierRadiation::FourierRadiation ()
     WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
         m_omega_grid == "linear" || m_omega_grid == "log",
         "warpx.fourier_radiation_omega_grid must be either 'linear' or 'log'.");
+    WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
+        m_particle_fraction > 0._rt && m_particle_fraction <= 1._rt,
+        "warpx.fourier_radiation_particle_fraction must be in the interval (0, 1].");
 
     pp_warpx.query("fourier_radiation_reset_after_output", m_reset_after_output);
 

@@ -1424,6 +1424,8 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
     amrex::IndexType const bz_type = bzfab->box().ixType();
 
     auto& attribs = pti.GetAttribs();
+    auto const& soa = pti.GetStructOfArrays();
+    uint64_t const* const AMREX_RESTRICT idcpu = soa.GetIdCPUData().data() + offset;
     ParticleReal* const AMREX_RESTRICT ux = attribs[PIdx::ux].dataPtr() + offset;
     ParticleReal* const AMREX_RESTRICT uy = attribs[PIdx::uy].dataPtr() + offset;
     ParticleReal* const AMREX_RESTRICT uz = attribs[PIdx::uz].dataPtr() + offset;
@@ -1495,6 +1497,13 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
     Real* const AMREX_RESTRICT radiation_amp_z_im =
         (do_fourier_radiation) ? fourier_radiation->AmpZImData() : nullptr;
     const Real radiation_time = WarpX::GetInstance().gett_new(lev);
+    const bool radiation_do_particle_filter =
+        (do_fourier_radiation) ? fourier_radiation->DoParticleFilter() : false;
+    const auto radiation_particle_filter =
+        (do_fourier_radiation) ? fourier_radiation->ParticleFilterFunction()
+                               : amrex::ParserExecutor<8>{};
+    const Real radiation_particle_fraction =
+        (do_fourier_radiation) ? fourier_radiation->ParticleFraction() : 1._rt;
 
     // local copies for device lambda capture
     const amrex::ParticleReal q = this->m_charge;
@@ -1628,66 +1637,90 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
             const Real gamma_inv_new = amrex::Math::rsqrt(
                 1._rt + (ux[ip]*ux[ip] + uy[ip]*uy[ip] + uz[ip]*uz[ip]) * inv_c * inv_c);
 
-            const Real betax_prev = ux_prev * inv_c * gamma_inv_prev;
-            const Real betay_prev = uy_prev * inv_c * gamma_inv_prev;
-            const Real betaz_prev = uz_prev * inv_c * gamma_inv_prev;
-            const Real betax_new = ux[ip] * inv_c * gamma_inv_new;
-            const Real betay_new = uy[ip] * inv_c * gamma_inv_new;
-            const Real betaz_new = uz[ip] * inv_c * gamma_inv_new;
-
-            const Real betax = 0.5_rt * (betax_prev + betax_new);
-            const Real betay = 0.5_rt * (betay_prev + betay_new);
-            const Real betaz = 0.5_rt * (betaz_prev + betaz_new);
-            const Real ax = (betax_new - betax_prev) * dt_inv;
-            const Real ay = (betay_new - betay_prev) * dt_inv;
-            const Real az = (betaz_new - betaz_prev) * dt_inv;
-
-            const Real x_mid = 0.5_rt * (x_old[ip] + xp);
-            const Real y_mid = 0.5_rt * (y_old[ip] + yp);
-            const Real z_mid = 0.5_rt * (z_old[ip] + zp);
-
-            for (int gti = 0; gti < radiation_n_total; ++gti) {
-                const int i_phi = gti / (radiation_n_omega * radiation_n_theta);
-                const int i_theta =
-                    (gti - i_phi * radiation_n_omega * radiation_n_theta) / radiation_n_omega;
-                const int i_omega =
-                    gti - i_phi * radiation_n_omega * radiation_n_theta
-                        - i_theta * radiation_n_omega;
-
-                const Real nx = radiation_sin_theta[i_theta] * radiation_cos_phi[i_phi];
-                const Real ny = radiation_sin_theta[i_theta] * radiation_sin_phi[i_phi];
-                const Real nz = radiation_cos_theta[i_theta];
-
-                const Real c2_denom = 1._rt - (betax*nx + betay*ny + betaz*nz);
-                if (amrex::Math::abs(c2_denom) <= std::numeric_limits<Real>::min()) {
-                    continue;
+            bool add_fourier_radiation = true;
+            Real radiation_sampling_weight = 1._rt;
+            const Real uxp = ux[ip] * inv_c;
+            const Real uyp = uy[ip] * inv_c;
+            const Real uzp = uz[ip] * inv_c;
+            if (radiation_do_particle_filter &&
+                radiation_particle_filter(radiation_time, xp, yp, zp, uxp, uyp, uzp, w[ip]) == 0._rt)
+            {
+                add_fourier_radiation = false;
+            } else if (radiation_particle_fraction < 1._rt) {
+                uint64_t hash = idcpu[ip] + 0x9e3779b97f4a7c15ULL;
+                hash = (hash ^ (hash >> 30)) * 0xbf58476d1ce4e5b9ULL;
+                hash = (hash ^ (hash >> 27)) * 0x94d049bb133111ebULL;
+                hash = hash ^ (hash >> 31);
+                constexpr Real inv_uint64_range = 1._rt / 18446744073709551616.0_rt;
+                if (static_cast<Real>(hash) * inv_uint64_range >= radiation_particle_fraction) {
+                    add_fourier_radiation = false;
+                } else {
+                    radiation_sampling_weight = 1._rt / radiation_particle_fraction;
                 }
+            }
 
-                const Real c2 = 1._rt / c2_denom;
-                const Real c1 = (ax*nx + ay*ny + az*nz) * c2 * c2;
-                const Real amplitude_x = c1 * (nx - betax) - c2 * ax;
-                const Real amplitude_y = c1 * (ny - betay) - c2 * ay;
-                const Real amplitude_z = c1 * (nz - betaz) - c2 * az;
+            if (add_fourier_radiation) {
+                const Real betax_prev = ux_prev * inv_c * gamma_inv_prev;
+                const Real betay_prev = uy_prev * inv_c * gamma_inv_prev;
+                const Real betaz_prev = uz_prev * inv_c * gamma_inv_prev;
+                const Real betax_new = ux[ip] * inv_c * gamma_inv_new;
+                const Real betay_new = uy[ip] * inv_c * gamma_inv_new;
+                const Real betaz_new = uz[ip] * inv_c * gamma_inv_new;
 
-                const Real phase = radiation_omega[i_omega]
-                    * (radiation_time + 0.5_rt*dt
-                       - (x_mid*nx + y_mid*ny + z_mid*nz) * inv_c);
-                const Real sin_phase = std::sin(phase);
-                const Real cos_phase = std::cos(phase);
-                const Real charge_weight_dt = w[ip] * q * dt;
+                const Real betax = 0.5_rt * (betax_prev + betax_new);
+                const Real betay = 0.5_rt * (betay_prev + betay_new);
+                const Real betaz = 0.5_rt * (betaz_prev + betaz_new);
+                const Real ax = (betax_new - betax_prev) * dt_inv;
+                const Real ay = (betay_new - betay_prev) * dt_inv;
+                const Real az = (betaz_new - betaz_prev) * dt_inv;
 
-                amrex::HostDevice::Atomic::Add(
-                    &radiation_amp_x_re[gti], charge_weight_dt * amplitude_x * cos_phase);
-                amrex::HostDevice::Atomic::Add(
-                    &radiation_amp_x_im[gti], charge_weight_dt * amplitude_x * sin_phase);
-                amrex::HostDevice::Atomic::Add(
-                    &radiation_amp_y_re[gti], charge_weight_dt * amplitude_y * cos_phase);
-                amrex::HostDevice::Atomic::Add(
-                    &radiation_amp_y_im[gti], charge_weight_dt * amplitude_y * sin_phase);
-                amrex::HostDevice::Atomic::Add(
-                    &radiation_amp_z_re[gti], charge_weight_dt * amplitude_z * cos_phase);
-                amrex::HostDevice::Atomic::Add(
-                    &radiation_amp_z_im[gti], charge_weight_dt * amplitude_z * sin_phase);
+                const Real x_mid = 0.5_rt * (x_old[ip] + xp);
+                const Real y_mid = 0.5_rt * (y_old[ip] + yp);
+                const Real z_mid = 0.5_rt * (z_old[ip] + zp);
+
+                for (int gti = 0; gti < radiation_n_total; ++gti) {
+                    const int i_phi = gti / (radiation_n_omega * radiation_n_theta);
+                    const int i_theta =
+                        (gti - i_phi * radiation_n_omega * radiation_n_theta) / radiation_n_omega;
+                    const int i_omega =
+                        gti - i_phi * radiation_n_omega * radiation_n_theta
+                            - i_theta * radiation_n_omega;
+
+                    const Real nx = radiation_sin_theta[i_theta] * radiation_cos_phi[i_phi];
+                    const Real ny = radiation_sin_theta[i_theta] * radiation_sin_phi[i_phi];
+                    const Real nz = radiation_cos_theta[i_theta];
+
+                    const Real c2_denom = 1._rt - (betax*nx + betay*ny + betaz*nz);
+                    if (amrex::Math::abs(c2_denom) <= std::numeric_limits<Real>::min()) {
+                        continue;
+                    }
+
+                    const Real c2 = 1._rt / c2_denom;
+                    const Real c1 = (ax*nx + ay*ny + az*nz) * c2 * c2;
+                    const Real amplitude_x = c1 * (nx - betax) - c2 * ax;
+                    const Real amplitude_y = c1 * (ny - betay) - c2 * ay;
+                    const Real amplitude_z = c1 * (nz - betaz) - c2 * az;
+
+                    const Real phase = radiation_omega[i_omega]
+                        * (radiation_time + 0.5_rt*dt
+                           - (x_mid*nx + y_mid*ny + z_mid*nz) * inv_c);
+                    const Real sin_phase = std::sin(phase);
+                    const Real cos_phase = std::cos(phase);
+                    const Real charge_weight_dt = w[ip] * q * dt * radiation_sampling_weight;
+
+                    amrex::HostDevice::Atomic::Add(
+                        &radiation_amp_x_re[gti], charge_weight_dt * amplitude_x * cos_phase);
+                    amrex::HostDevice::Atomic::Add(
+                        &radiation_amp_x_im[gti], charge_weight_dt * amplitude_x * sin_phase);
+                    amrex::HostDevice::Atomic::Add(
+                        &radiation_amp_y_re[gti], charge_weight_dt * amplitude_y * cos_phase);
+                    amrex::HostDevice::Atomic::Add(
+                        &radiation_amp_y_im[gti], charge_weight_dt * amplitude_y * sin_phase);
+                    amrex::HostDevice::Atomic::Add(
+                        &radiation_amp_z_re[gti], charge_weight_dt * amplitude_z * cos_phase);
+                    amrex::HostDevice::Atomic::Add(
+                        &radiation_amp_z_im[gti], charge_weight_dt * amplitude_z * sin_phase);
+                }
             }
         }
 
