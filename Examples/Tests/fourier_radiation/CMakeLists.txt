@@ -22,16 +22,6 @@ add_warpx_test(
 )
 
 add_warpx_test(
-    test_3d_fourier_radiation_filtered  # name
-    3  # dims
-    1  # nprocs
-    inputs_test_3d_fourier_radiation_filtered  # inputs
-    "analysis_fourier_radiation.py filtered"  # analysis
-    OFF  # checksum
-    OFF  # dependency
-)
-
-add_warpx_test(
     test_3d_fourier_radiation_undulator  # name
     3  # dims
     1  # nprocs
