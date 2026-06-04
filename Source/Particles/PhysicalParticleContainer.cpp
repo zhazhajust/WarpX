@@ -315,6 +315,7 @@ PhysicalParticleContainer::PhysicalParticleContainer (AmrCore* amr_core, int isp
     if (fourier_radiation && fourier_radiation->IsSpeciesSelected(species_name)) {
         m_save_previous_position = true;
         m_do_fourier_radiation = true;
+        m_fourier_radiation_filter_is_latched = fourier_radiation->ParticleFilterIsLatched();
     }
     if (m_save_previous_position) {
 #if !defined(WARPX_DIM_1D_Z)
@@ -334,6 +335,9 @@ PhysicalParticleContainer::PhysicalParticleContainer (AmrCore* amr_core, int isp
         AddRealComp("prev_ux");
         AddRealComp("prev_uy");
         AddRealComp("prev_uz");
+        if (m_fourier_radiation_filter_is_latched) {
+            AddIntComp("fourier_radiation_tracked");
+        }
     }
 
     // Read reflection models for absorbing boundaries; defaults to a zero
@@ -1436,6 +1440,7 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
     ParticleReal* ux_old = nullptr;
     ParticleReal* uy_old = nullptr;
     ParticleReal* uz_old = nullptr;
+    int* fourier_radiation_tracked = nullptr;
     if (save_previous_position) {
 #if !defined(WARPX_DIM_1D_Z)
         x_old = pti.GetAttribs("prev_x").dataPtr() + offset;
@@ -1456,6 +1461,10 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
         ux_old = pti.GetAttribs("prev_ux").dataPtr() + offset;
         uy_old = pti.GetAttribs("prev_uy").dataPtr() + offset;
         uz_old = pti.GetAttribs("prev_uz").dataPtr() + offset;
+        if (m_fourier_radiation_filter_is_latched) {
+            fourier_radiation_tracked =
+                pti.GetiAttribs("fourier_radiation_tracked").dataPtr() + offset;
+        }
     }
 
     auto* fourier_radiation = WarpX::GetInstance().GetFourierRadiation();
@@ -1487,6 +1496,8 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
     const Real radiation_time = WarpX::GetInstance().gett_new(lev);
     const bool radiation_do_particle_filter =
         (do_fourier_radiation) ? fourier_radiation->DoParticleFilter() : false;
+    const bool radiation_particle_filter_is_latched =
+        do_fourier_radiation && m_fourier_radiation_filter_is_latched;
     const auto radiation_particle_filter =
         (do_fourier_radiation) ? fourier_radiation->ParticleFilterFunction()
                                : amrex::ParserExecutor<8>{};
@@ -1628,11 +1639,20 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
             const Real uxp = ux[ip] * inv_c;
             const Real uyp = uy[ip] * inv_c;
             const Real uzp = uz[ip] * inv_c;
-            if (radiation_do_particle_filter &&
-                radiation_particle_filter(radiation_time, xp, yp, zp, uxp, uyp, uzp, w[ip]) == 0._rt)
-            {
-                add_fourier_radiation = false;
-            } else if (radiation_particle_fraction < 1._rt) {
+            if (radiation_do_particle_filter) {
+                const bool particle_filter_passes =
+                    radiation_particle_filter(radiation_time, xp, yp, zp, uxp, uyp, uzp, w[ip])
+                    != 0._rt;
+                if (radiation_particle_filter_is_latched) {
+                    if (particle_filter_passes) {
+                        fourier_radiation_tracked[ip] = 1;
+                    }
+                    add_fourier_radiation = fourier_radiation_tracked[ip] != 0;
+                } else if (!particle_filter_passes) {
+                    add_fourier_radiation = false;
+                }
+            }
+            if (add_fourier_radiation && radiation_particle_fraction < 1._rt) {
                 uint64_t hash = idcpu[ip] + 0x9e3779b97f4a7c15ULL;
                 hash = (hash ^ (hash >> 30)) * 0xbf58476d1ce4e5b9ULL;
                 hash = (hash ^ (hash >> 27)) * 0x94d049bb133111ebULL;
