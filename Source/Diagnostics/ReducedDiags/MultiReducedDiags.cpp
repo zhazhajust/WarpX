@@ -9,6 +9,7 @@
 #include "BeamRelevant.H"
 #include "ChargeOnEB.H"
 #include "ColliderRelevant.H"
+#include "CylindricalScreenFlux.H"
 #include "DifferentialLuminosity.H"
 #include "DifferentialLuminosity2D.H"
 #include "FieldEnergy.H"
@@ -58,6 +59,7 @@ MultiReducedDiags::MultiReducedDiags ()
             {"BeamRelevant",          [](CS s){return std::make_unique<BeamRelevant>(s);}},
             {"ChargeOnEB",            [](CS s){return std::make_unique<ChargeOnEB>(s);}},
             {"ColliderRelevant",      [](CS s){return std::make_unique<ColliderRelevant>(s);}},
+            {"CylindricalScreenFlux", [](CS s){return std::make_unique<CylindricalScreenFlux>(s);}},
             {"DifferentialLuminosity",[](CS s){return std::make_unique<DifferentialLuminosity>(s);}},
             {"DifferentialLuminosity2D",[](CS s){return std::make_unique<DifferentialLuminosity2D>(s);}},
             {"ParticleEnergy",        [](CS s){return std::make_unique<ParticleEnergy>(s);}},
