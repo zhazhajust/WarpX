@@ -26,7 +26,6 @@
 #include <cmath>
 #include <fstream>
 #include <iomanip>
-#include <limits>
 #include <map>
 #include <set>
 #include <string>
@@ -70,9 +69,11 @@ CylindricalScreenFlux::CylindricalScreenFlux (const std::string& rd_name)
         utils::parser::getWithParser(pp_rd_name, "bins_energy", m_bins_energy);
         utils::parser::getWithParser(pp_rd_name, "energy_min", m_energy_min);
         utils::parser::getWithParser(pp_rd_name, "energy_max", m_energy_max);
-        m_t_max = std::numeric_limits<amrex::Real>::max();
-        utils::parser::queryWithParser(pp_rd_name, "t_min", m_t_min);
-        utils::parser::queryWithParser(pp_rd_name, "t_max", m_t_max);
+        const bool has_time_interval =
+            utils::parser::queryWithParser(
+                pp_rd_name, "time_interval", m_time_interval) ||
+            utils::parser::queryWithParser(
+                pp_rd_name, "time_intervel", m_time_interval);
         m_histogram_file_name = m_path + m_rd_name + "_histogram." + m_extension;
         pp_rd_name.query("histogram_file_name", m_histogram_file_name);
 
@@ -86,8 +87,12 @@ CylindricalScreenFlux::CylindricalScreenFlux (const std::string& rd_name)
             m_energy_min < m_energy_max,
             "CylindricalScreenFlux.energy_min must be < energy_max.");
         WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
-            m_t_min <= m_t_max,
-            "CylindricalScreenFlux.t_min must be <= t_max.");
+            has_time_interval,
+            "CylindricalScreenFlux.time_interval must be specified.");
+        WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
+            m_time_interval > 0.0,
+            "CylindricalScreenFlux.time_interval must be > 0.");
+        m_interval_stop = m_time_interval;
     }
 
     std::string restart_chkfile;
@@ -151,7 +156,8 @@ CylindricalScreenFlux::CylindricalScreenFlux (const std::string& rd_name)
             static_cast<std::size_t>(m_bins_theta) *
             static_cast<std::size_t>(m_bins_z) *
             static_cast<std::size_t>(m_bins_energy) * ncomp;
-        m_histogram.assign(histogram_size, 0.0);
+        m_histogram.resize(histogram_size);
+        ResetHistogram();
     }
 
     if (amrex::ParallelDescriptor::IOProcessor()) {
@@ -215,6 +221,12 @@ CylindricalScreenFlux::WriteHistogramHeader () const {
     ofs << m_sep;
     ofs << "[" << c++ << "]time(s)";
     ofs << m_sep;
+    ofs << "[" << c++ << "]interval_index()";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]interval_start(s)";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]interval_stop(s)";
+    ofs << m_sep;
     ofs << "[" << c++ << "]species()";
     ofs << m_sep;
     ofs << "[" << c++ << "]theta_bin()";
@@ -234,10 +246,6 @@ CylindricalScreenFlux::WriteHistogramHeader () const {
     ofs << "[" << c++ << "]energy_min(eV)";
     ofs << m_sep;
     ofs << "[" << c++ << "]energy_max(eV)";
-    ofs << m_sep;
-    ofs << "[" << c++ << "]t_min(s)";
-    ofs << m_sep;
-    ofs << "[" << c++ << "]t_max(s)";
     ofs << m_sep;
     ofs << "[" << c++ << "]sum_weight()";
     ofs << m_sep;
@@ -265,9 +273,21 @@ CylindricalScreenFlux::ComputeDiags (int step) {
     const auto& mypc = warpx.GetPartContainer();
     const bool do_output = m_intervals.contains(step + 1);
     const amrex::Real time = warpx.gett_new(0);
-    const bool do_histogram =
-        m_histogram_enabled && !m_histogram_written &&
-        time >= m_t_min && time <= m_t_max;
+
+    while (m_histogram_enabled && time > m_interval_stop) {
+        amrex::ParallelDescriptor::ReduceRealSum(
+            m_histogram.data(), static_cast<int>(m_histogram.size()),
+            amrex::ParallelDescriptor::IOProcessorNumber());
+        if (amrex::ParallelDescriptor::IOProcessor()) {
+            WriteHistogram(
+                step, m_interval_stop, m_histogram_interval_index,
+                m_interval_start, m_interval_stop, m_histogram);
+        }
+        ResetHistogram();
+        ++m_histogram_interval_index;
+        m_interval_start = m_interval_stop;
+        m_interval_stop += m_time_interval;
+    }
 
     std::ofstream ofs;
     if (do_output && m_write_particles) {
@@ -366,7 +386,7 @@ CylindricalScreenFlux::ComputeDiags (int step) {
                         ofs << w[i] << "\n";
                     }
 
-                    if (do_histogram) {
+                    if (m_histogram_enabled && time <= m_interval_stop) {
                         constexpr amrex::Real pi =
                             3.141592653589793238462643383279502884;
                         const amrex::Real theta_norm =
@@ -401,14 +421,19 @@ CylindricalScreenFlux::ComputeDiags (int step) {
         species_state.m_previous_r = std::move(current_r);
     }
 
-    if (m_histogram_enabled && !m_histogram_written && time >= m_t_max) {
+    if (m_histogram_enabled && time >= m_interval_stop) {
         amrex::ParallelDescriptor::ReduceRealSum(
             m_histogram.data(), static_cast<int>(m_histogram.size()),
             amrex::ParallelDescriptor::IOProcessorNumber());
         if (amrex::ParallelDescriptor::IOProcessor()) {
-            WriteHistogram(step, time, m_histogram);
+            WriteHistogram(
+                step, m_interval_stop, m_histogram_interval_index,
+                m_interval_start, m_interval_stop, m_histogram);
         }
-        m_histogram_written = true;
+        ResetHistogram();
+        ++m_histogram_interval_index;
+        m_interval_start = m_interval_stop;
+        m_interval_stop += m_time_interval;
     }
 #else
     static_cast<void>(step);
@@ -419,8 +444,19 @@ void
 CylindricalScreenFlux::WriteToFile (int /*step*/) const {}
 
 void
+CylindricalScreenFlux::ResetHistogram ()
+{
+    std::fill(m_histogram.begin(), m_histogram.end(), 0.0);
+}
+
+void
 CylindricalScreenFlux::WriteHistogram (
-    int step, amrex::Real time, std::vector<amrex::Real> const& histogram) const
+    int step,
+    amrex::Real time,
+    int interval_index,
+    amrex::Real interval_start,
+    amrex::Real interval_stop,
+    std::vector<amrex::Real> const& histogram) const
 {
     std::ofstream ofs{m_histogram_file_name, std::ofstream::out | std::ofstream::app};
     ofs << std::fixed << std::setprecision(m_precision) << std::scientific;
@@ -451,6 +487,9 @@ CylindricalScreenFlux::WriteHistogram (
                     const amrex::Real energy_max = energy_min + denergy;
                     ofs << step + 1 << m_sep;
                     ofs << time << m_sep;
+                    ofs << interval_index << m_sep;
+                    ofs << interval_start << m_sep;
+                    ofs << interval_stop << m_sep;
                     ofs << m_species[ispecies].m_name << m_sep;
                     ofs << itheta << m_sep;
                     ofs << iz << m_sep;
@@ -461,8 +500,6 @@ CylindricalScreenFlux::WriteHistogram (
                     ofs << z_max << m_sep;
                     ofs << energy_min << m_sep;
                     ofs << energy_max << m_sep;
-                    ofs << m_t_min << m_sep;
-                    ofs << m_t_max << m_sep;
                     ofs << sum_weight << m_sep;
                     ofs << count << "\n";
                 }

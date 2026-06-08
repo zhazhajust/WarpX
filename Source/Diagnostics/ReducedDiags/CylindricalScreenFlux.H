@@ -54,10 +54,15 @@ class CylindricalScreenFlux : public ReducedDiags {
     void WriteHistogram (
         int step,
         amrex::Real time,
+        int interval_index,
+        amrex::Real interval_start,
+        amrex::Real interval_stop,
         std::vector<amrex::Real> const& histogram) const;
 
     [[nodiscard]] std::size_t HistogramIndex (
         int species_index, int theta_bin, int z_bin, int energy_bin, int component) const;
+
+    void ResetHistogram ();
 
     amrex::ParticleReal m_r0 = 0.0;
     amrex::ParticleReal m_z_min = 0.0;
@@ -67,12 +72,13 @@ class CylindricalScreenFlux : public ReducedDiags {
     bool m_write_particles = true;
     bool m_histogram_enabled = false;
     bool m_write_histogram_header = false;
-    bool m_histogram_written = false;
     int m_bins_theta = 0;
     int m_bins_z = 0;
     int m_bins_energy = 0;
-    amrex::Real m_t_min = 0.0;
-    amrex::Real m_t_max = 0.0;
+    int m_histogram_interval_index = 0;
+    amrex::Real m_time_interval = 0.0;
+    amrex::Real m_interval_start = 0.0;
+    amrex::Real m_interval_stop = 0.0;
     amrex::ParticleReal m_energy_min = 0.0;
     amrex::ParticleReal m_energy_max = 0.0;
     std::vector<SpeciesState> m_species;

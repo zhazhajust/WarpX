@@ -255,8 +255,11 @@ def make_matplotlib_histogram_plot(data, output_path, title, plot_type):
 
     species = sorted(set(data["species"]))
     window = ""
-    if "t_min" in data and "t_max" in data:
-        window = f", t=[{min(data['t_min']):.6g}, {max(data['t_max']):.6g}] s"
+    if "interval_start" in data and "interval_stop" in data:
+        window = (
+            f", interval=[{min(data['interval_start']):.6g}, "
+            f"{max(data['interval_stop']):.6g}] s"
+        )
     fig.suptitle(
         f"{title}\nSpecies: {', '.join(species)}, "
         f"rows: {len(data['sum_weight'])}, total weight: {sum(data['sum_weight']):.6g}"

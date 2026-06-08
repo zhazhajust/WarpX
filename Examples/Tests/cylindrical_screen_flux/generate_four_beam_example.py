@@ -117,13 +117,14 @@ screen.intervals = 1
 screen.r0 = 0.5
 screen.species = electrons
 screen.write_particles = 0
-screen.t_min = 0.0
-screen.t_max = 7.2e-9
+screen.bins_energy = 80
 screen.bins_theta = 120
 screen.bins_z = 120
-screen.bins_energy = 80
-screen.energy_min = 0.0
 screen.energy_max = 30000.0
+screen.energy_min = 0.0
+screen.z_max =  1.0
+screen.z_min = -1.0
+screen.time_interval = 2.4e-9
 screen.histogram_file_name = diags/reducedfiles/screen_hist.csv
 """
     path.write_text(text)
