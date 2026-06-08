@@ -57,12 +57,51 @@ CylindricalScreenFlux::CylindricalScreenFlux (const std::string& rd_name)
     m_extension = "csv";
     m_file_name = m_path + m_rd_name + "." + m_extension;
     pp_rd_name.query("file_name", m_file_name);
+    pp_rd_name.query("write_particles", m_write_particles);
+
+    m_histogram_enabled =
+        pp_rd_name.query("bins_theta", m_bins_theta) ||
+        pp_rd_name.query("bins_z", m_bins_z) ||
+        pp_rd_name.query("bins_energy", m_bins_energy) ||
+        pp_rd_name.query("histogram_file_name", m_histogram_file_name);
+    if (m_histogram_enabled) {
+        utils::parser::getWithParser(pp_rd_name, "bins_theta", m_bins_theta);
+        utils::parser::getWithParser(pp_rd_name, "bins_z", m_bins_z);
+        utils::parser::getWithParser(pp_rd_name, "bins_energy", m_bins_energy);
+        utils::parser::getWithParser(pp_rd_name, "energy_min", m_energy_min);
+        utils::parser::getWithParser(pp_rd_name, "energy_max", m_energy_max);
+        m_t_max = std::numeric_limits<amrex::Real>::max();
+        utils::parser::queryWithParser(pp_rd_name, "t_min", m_t_min);
+        utils::parser::queryWithParser(pp_rd_name, "t_max", m_t_max);
+        m_histogram_file_name = m_path + m_rd_name + "_histogram." + m_extension;
+        pp_rd_name.query("histogram_file_name", m_histogram_file_name);
+
+        WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
+            m_bins_theta > 0, "CylindricalScreenFlux.bins_theta must be > 0.");
+        WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
+            m_bins_z > 0, "CylindricalScreenFlux.bins_z must be > 0.");
+        WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
+            m_bins_energy > 0, "CylindricalScreenFlux.bins_energy must be > 0.");
+        WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
+            m_energy_min < m_energy_max,
+            "CylindricalScreenFlux.energy_min must be < energy_max.");
+        WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
+            m_t_min <= m_t_max,
+            "CylindricalScreenFlux.t_min must be <= t_max.");
+    }
 
     std::string restart_chkfile;
     const amrex::ParmParse pp_amr("amr");
     pp_amr.query("restart", restart_chkfile);
     const bool is_not_restart = restart_chkfile.empty();
     m_write_header = is_not_restart || !amrex::FileExists(m_file_name);
+    m_write_histogram_header =
+        m_histogram_enabled &&
+        (is_not_restart || !amrex::FileExists(m_histogram_file_name));
+    WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
+        m_write_particles || m_histogram_enabled,
+        "CylindricalScreenFlux.write_particles=0 requires histogram output "
+        "parameters.");
 
     const auto& mypc = warpx.GetPartContainer();
     const auto species_names = mypc.GetSpeciesNames();
@@ -105,46 +144,118 @@ CylindricalScreenFlux::CylindricalScreenFlux (const std::string& rd_name)
         }
     }
 
-    if (amrex::ParallelDescriptor::IOProcessor() && m_write_header) {
-        std::ofstream ofs{m_file_name, std::ofstream::out};
-        int c = 0;
-        ofs << "#";
-        ofs << "[" << c++ << "]step()";
-        ofs << m_sep;
-        ofs << "[" << c++ << "]time(s)";
-        ofs << m_sep;
-        ofs << "[" << c++ << "]species()";
-        ofs << m_sep;
-        ofs << "[" << c++ << "]id()";
-        ofs << m_sep;
-        ofs << "[" << c++ << "]x(m)";
-        ofs << m_sep;
-        ofs << "[" << c++ << "]y(m)";
-        ofs << m_sep;
-        ofs << "[" << c++ << "]z(m)";
-        ofs << m_sep;
-        ofs << "[" << c++ << "]r(m)";
-        ofs << m_sep;
-        ofs << "[" << c++ << "]theta(rad)";
-        ofs << m_sep;
-        ofs << "[" << c++ << "]px(kg*m/s)";
-        ofs << m_sep;
-        ofs << "[" << c++ << "]py(kg*m/s)";
-        ofs << m_sep;
-        ofs << "[" << c++ << "]pz(kg*m/s)";
-        ofs << m_sep;
-        ofs << "[" << c++ << "]KE_eV(eV)";
-        ofs << m_sep;
-        ofs << "[" << c++ << "]ux(m/s)";
-        ofs << m_sep;
-        ofs << "[" << c++ << "]uy(m/s)";
-        ofs << m_sep;
-        ofs << "[" << c++ << "]uz(m/s)";
-        ofs << m_sep;
-        ofs << "[" << c++ << "]weight()";
-        ofs << "\n";
+    if (m_histogram_enabled) {
+        constexpr int ncomp = 2;
+        const auto histogram_size =
+            static_cast<std::size_t>(m_species.size()) *
+            static_cast<std::size_t>(m_bins_theta) *
+            static_cast<std::size_t>(m_bins_z) *
+            static_cast<std::size_t>(m_bins_energy) * ncomp;
+        m_histogram.assign(histogram_size, 0.0);
+    }
+
+    if (amrex::ParallelDescriptor::IOProcessor()) {
+        if (m_write_particles && m_write_header) {
+            WriteParticleHeader();
+        }
+        if (m_write_histogram_header) {
+            WriteHistogramHeader();
+        }
     }
 #endif
+}
+
+void
+CylindricalScreenFlux::WriteParticleHeader () const {
+    std::ofstream ofs{m_file_name, std::ofstream::out};
+    int c = 0;
+    ofs << "#";
+    ofs << "[" << c++ << "]step()";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]time(s)";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]species()";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]id()";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]x(m)";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]y(m)";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]z(m)";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]r(m)";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]theta(rad)";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]px(kg*m/s)";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]py(kg*m/s)";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]pz(kg*m/s)";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]KE_eV(eV)";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]ux(m/s)";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]uy(m/s)";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]uz(m/s)";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]weight()";
+    ofs << "\n";
+}
+
+void
+CylindricalScreenFlux::WriteHistogramHeader () const {
+    std::ofstream ofs{m_histogram_file_name, std::ofstream::out};
+    int c = 0;
+    ofs << "#";
+    ofs << "[" << c++ << "]step()";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]time(s)";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]species()";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]theta_bin()";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]z_bin()";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]energy_bin()";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]theta_min(rad)";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]theta_max(rad)";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]z_min(m)";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]z_max(m)";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]energy_min(eV)";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]energy_max(eV)";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]t_min(s)";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]t_max(s)";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]sum_weight()";
+    ofs << m_sep;
+    ofs << "[" << c++ << "]count()";
+    ofs << "\n";
+}
+
+std::size_t
+CylindricalScreenFlux::HistogramIndex (
+    int species_index, int theta_bin, int z_bin, int energy_bin, int component) const
+{
+    constexpr int ncomp = 2;
+    return static_cast<std::size_t>(
+        (((species_index * m_bins_theta + theta_bin) * m_bins_z + z_bin) *
+             m_bins_energy +
+         energy_bin) *
+            ncomp +
+        component);
 }
 
 void
@@ -154,14 +265,19 @@ CylindricalScreenFlux::ComputeDiags (int step) {
     const auto& mypc = warpx.GetPartContainer();
     const bool do_output = m_intervals.contains(step + 1);
     const amrex::Real time = warpx.gett_new(0);
+    const bool do_histogram =
+        m_histogram_enabled && !m_histogram_written &&
+        time >= m_t_min && time <= m_t_max;
 
     std::ofstream ofs;
-    if (do_output) {
+    if (do_output && m_write_particles) {
         ofs.open(m_file_name, std::ofstream::out | std::ofstream::app);
         ofs << std::fixed << std::setprecision(m_precision) << std::scientific;
     }
 
-    for (auto& species_state : m_species) {
+    for (int species_counter = 0; species_counter < static_cast<int>(m_species.size());
+         ++species_counter) {
+        auto& species_state = m_species[species_counter];
         auto& myspc = mypc.GetParticleContainer(species_state.m_index);
         const amrex::ParticleReal mass = myspc.getMass();
         const amrex::ParticleReal joule_to_eV =
@@ -199,9 +315,6 @@ CylindricalScreenFlux::ComputeDiags (int step) {
                     const amrex::ParticleReal r_new = r[i];
                     current_r[packed_id] = r_new;
 
-                    if (!do_output) {
-                        continue;
-                    }
                     if (z[i] < m_z_min || z[i] > m_z_max) {
                         continue;
                     }
@@ -233,28 +346,69 @@ CylindricalScreenFlux::ComputeDiags (int step) {
                         (gamma - amrex::ParticleReal(1.0)) * mass *
                         PhysConst::c * PhysConst::c * joule_to_eV;
 
-                    ofs << step + 1 << m_sep;
-                    ofs << time << m_sep;
-                    ofs << species_state.m_name << m_sep;
-                    ofs << static_cast<amrex::Long>(pid) << m_sep;
-                    ofs << x << m_sep;
-                    ofs << y << m_sep;
-                    ofs << z[i] << m_sep;
-                    ofs << r_new << m_sep;
-                    ofs << theta[i] << m_sep;
-                    ofs << px << m_sep;
-                    ofs << py << m_sep;
-                    ofs << pz << m_sep;
-                    ofs << ke_eV << m_sep;
-                    ofs << ux[i] << m_sep;
-                    ofs << uy[i] << m_sep;
-                    ofs << uz[i] << m_sep;
-                    ofs << w[i] << "\n";
+                    if (do_output && m_write_particles) {
+                        ofs << step + 1 << m_sep;
+                        ofs << time << m_sep;
+                        ofs << species_state.m_name << m_sep;
+                        ofs << static_cast<amrex::Long>(pid) << m_sep;
+                        ofs << x << m_sep;
+                        ofs << y << m_sep;
+                        ofs << z[i] << m_sep;
+                        ofs << r_new << m_sep;
+                        ofs << theta[i] << m_sep;
+                        ofs << px << m_sep;
+                        ofs << py << m_sep;
+                        ofs << pz << m_sep;
+                        ofs << ke_eV << m_sep;
+                        ofs << ux[i] << m_sep;
+                        ofs << uy[i] << m_sep;
+                        ofs << uz[i] << m_sep;
+                        ofs << w[i] << "\n";
+                    }
+
+                    if (do_histogram) {
+                        constexpr amrex::Real pi =
+                            3.141592653589793238462643383279502884;
+                        const amrex::Real theta_norm =
+                            (theta[i] + pi) / (2.0 * pi);
+                        const amrex::Real z_norm =
+                            (z[i] - m_z_min) / (m_z_max - m_z_min);
+                        const amrex::Real energy_norm =
+                            (ke_eV - m_energy_min) /
+                            (m_energy_max - m_energy_min);
+                        const int theta_bin =
+                            static_cast<int>(std::floor(theta_norm * m_bins_theta));
+                        const int z_bin =
+                            static_cast<int>(std::floor(z_norm * m_bins_z));
+                        const int energy_bin =
+                            static_cast<int>(std::floor(energy_norm * m_bins_energy));
+
+                        if (theta_bin >= 0 && theta_bin < m_bins_theta &&
+                            z_bin >= 0 && z_bin < m_bins_z &&
+                            energy_bin >= 0 && energy_bin < m_bins_energy) {
+                            m_histogram[HistogramIndex(
+                                species_counter, theta_bin, z_bin, energy_bin, 0)] +=
+                                static_cast<amrex::Real>(w[i]);
+                            m_histogram[HistogramIndex(
+                                species_counter, theta_bin, z_bin, energy_bin, 1)] +=
+                                1.0;
+                        }
+                    }
                 }
             }
         }
 
         species_state.m_previous_r = std::move(current_r);
+    }
+
+    if (m_histogram_enabled && !m_histogram_written && time >= m_t_max) {
+        amrex::ParallelDescriptor::ReduceRealSum(
+            m_histogram.data(), static_cast<int>(m_histogram.size()),
+            amrex::ParallelDescriptor::IOProcessorNumber());
+        if (amrex::ParallelDescriptor::IOProcessor()) {
+            WriteHistogram(step, time, m_histogram);
+        }
+        m_histogram_written = true;
     }
 #else
     static_cast<void>(step);
@@ -263,3 +417,56 @@ CylindricalScreenFlux::ComputeDiags (int step) {
 
 void
 CylindricalScreenFlux::WriteToFile (int /*step*/) const {}
+
+void
+CylindricalScreenFlux::WriteHistogram (
+    int step, amrex::Real time, std::vector<amrex::Real> const& histogram) const
+{
+    std::ofstream ofs{m_histogram_file_name, std::ofstream::out | std::ofstream::app};
+    ofs << std::fixed << std::setprecision(m_precision) << std::scientific;
+
+    constexpr amrex::Real pi = 3.141592653589793238462643383279502884;
+    const amrex::Real dtheta = 2.0 * pi / static_cast<amrex::Real>(m_bins_theta);
+    const amrex::Real dz = (m_z_max - m_z_min) / static_cast<amrex::Real>(m_bins_z);
+    const amrex::Real denergy =
+        (m_energy_max - m_energy_min) / static_cast<amrex::Real>(m_bins_energy);
+
+    for (int ispecies = 0; ispecies < static_cast<int>(m_species.size()); ++ispecies) {
+        for (int itheta = 0; itheta < m_bins_theta; ++itheta) {
+            const amrex::Real theta_min = -pi + itheta * dtheta;
+            const amrex::Real theta_max = theta_min + dtheta;
+            for (int iz = 0; iz < m_bins_z; ++iz) {
+                const amrex::Real z_min = m_z_min + iz * dz;
+                const amrex::Real z_max = z_min + dz;
+                for (int ie = 0; ie < m_bins_energy; ++ie) {
+                    const auto sum_weight = histogram[HistogramIndex(
+                        ispecies, itheta, iz, ie, 0)];
+                    const auto count = histogram[HistogramIndex(
+                        ispecies, itheta, iz, ie, 1)];
+                    if (sum_weight == 0.0 && count == 0.0) {
+                        continue;
+                    }
+
+                    const amrex::Real energy_min = m_energy_min + ie * denergy;
+                    const amrex::Real energy_max = energy_min + denergy;
+                    ofs << step + 1 << m_sep;
+                    ofs << time << m_sep;
+                    ofs << m_species[ispecies].m_name << m_sep;
+                    ofs << itheta << m_sep;
+                    ofs << iz << m_sep;
+                    ofs << ie << m_sep;
+                    ofs << theta_min << m_sep;
+                    ofs << theta_max << m_sep;
+                    ofs << z_min << m_sep;
+                    ofs << z_max << m_sep;
+                    ofs << energy_min << m_sep;
+                    ofs << energy_max << m_sep;
+                    ofs << m_t_min << m_sep;
+                    ofs << m_t_max << m_sep;
+                    ofs << sum_weight << m_sep;
+                    ofs << count << "\n";
+                }
+            }
+        }
+    }
+}
