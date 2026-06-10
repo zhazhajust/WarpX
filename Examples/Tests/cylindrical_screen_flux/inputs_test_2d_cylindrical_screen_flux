@@ -1,0 +1,49 @@
+# Copyright 2026
+#
+# Test a reduced diagnostic that records inward 2D fixed-theta screen crossings.
+
+max_step = 3
+
+amr.n_cell = 32 16
+amr.max_grid_size = 32
+amr.max_level = 0
+
+geometry.dims = 2
+geometry.prob_lo = -1.0 -1.0
+geometry.prob_hi =  1.0  1.0
+
+boundary.field_lo = none periodic
+boundary.field_hi = none periodic
+boundary.particle_lo = absorbing periodic
+boundary.particle_hi = absorbing periodic
+
+warpx.const_dt = 3.0e-9
+warpx.serialize_initial_conditions = 1
+warpx.verbose = 1
+
+algo.current_deposition = direct
+algo.field_gathering = energy-conserving
+algo.particle_shape = 1
+
+particles.species_names = electrons
+
+electrons.charge = -q_e
+electrons.mass = m_e
+electrons.injection_style = MultipleParticles
+electrons.multiple_particles_pos_x =  0.75 -0.75
+electrons.multiple_particles_pos_y =  0.0   0.0
+electrons.multiple_particles_pos_z =  0.0   0.0
+electrons.multiple_particles_ux =    -0.16  0.16
+electrons.multiple_particles_uy =     0.0   0.0
+electrons.multiple_particles_uz =     0.0   0.0
+electrons.multiple_particles_weight = 4.0   6.0
+electrons.do_not_deposit = 1
+
+warpx.reduced_diags_names = screen
+screen.type = CylindricalScreenFlux
+screen.intervals = 1
+screen.r0 = 0.5
+screen.species = electrons
+screen.theta = 0.0
+screen.two_sided = 1
+screen.file_name = diags/reducedfiles/screen.csv

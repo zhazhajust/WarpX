@@ -16,8 +16,11 @@
 #include "WarpX.H"
 
 #include <AMReX.H>
+#include <AMReX_GpuAtomic.H>
 #include <AMReX_GpuContainers.H>
 #include <AMReX_GpuControl.H>
+#include <AMReX_GpuLaunch.H>
+#include <AMReX_Math.H>
 #include <AMReX_ParallelDescriptor.H>
 #include <AMReX_ParmParse.H>
 #include <AMReX_Particle.H>
@@ -27,25 +30,75 @@
 #include <cmath>
 #include <fstream>
 #include <iomanip>
-#include <map>
 #include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
+namespace
+{
+    struct ScreenEvent {
+        std::uint64_t m_packed_id = 0;
+        amrex::ParticleReal m_x = 0.0;
+        amrex::ParticleReal m_y = 0.0;
+        amrex::ParticleReal m_z = 0.0;
+        amrex::ParticleReal m_r = 0.0;
+        amrex::ParticleReal m_theta = 0.0;
+        amrex::ParticleReal m_px = 0.0;
+        amrex::ParticleReal m_py = 0.0;
+        amrex::ParticleReal m_pz = 0.0;
+        amrex::ParticleReal m_ke_eV = 0.0;
+        amrex::ParticleReal m_ux = 0.0;
+        amrex::ParticleReal m_uy = 0.0;
+        amrex::ParticleReal m_uz = 0.0;
+        amrex::ParticleReal m_w = 0.0;
+    };
+
+#if defined(WARPX_DIM_RZ) || defined(WARPX_DIM_XZ)
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+    amrex::ParticleReal NormalizeTheta (amrex::ParticleReal theta)
+    {
+        constexpr amrex::ParticleReal pi =
+            amrex::ParticleReal(3.141592653589793238462643383279502884);
+        constexpr amrex::ParticleReal two_pi = amrex::ParticleReal(2.0) * pi;
+        while (theta < -pi) {
+            theta += two_pi;
+        }
+        while (theta >= pi) {
+            theta -= two_pi;
+        }
+        return theta;
+    }
+#endif
+}
+
 CylindricalScreenFlux::CylindricalScreenFlux (const std::string& rd_name)
     : ReducedDiags{rd_name} {
-#if !defined(WARPX_DIM_RZ)
+#if !defined(WARPX_DIM_RZ) && !defined(WARPX_DIM_XZ) && !defined(WARPX_DIM_3D)
     WARPX_ABORT_WITH_MESSAGE(
-        "CylindricalScreenFlux is only available in RZ geometry.");
+        "CylindricalScreenFlux is only available in 2D XZ, 3D, and RZ geometry.");
 #else
     const amrex::ParmParse pp_rd_name(rd_name);
     utils::parser::getWithParser(pp_rd_name, "r0", m_r0);
+    utils::parser::queryWithParser(pp_rd_name, "center_x", m_center_x);
+#if defined(WARPX_DIM_3D)
+    utils::parser::queryWithParser(pp_rd_name, "center_y", m_center_y);
+#endif
+#if defined(WARPX_DIM_XZ)
+    utils::parser::queryWithParser(pp_rd_name, "theta", m_theta_2d);
+    pp_rd_name.query("two_sided", m_two_sided_2d);
+    m_theta_2d = NormalizeTheta(m_theta_2d);
+#endif
 
     auto& warpx = WarpX::GetInstance();
     const amrex::Geometry& geom = warpx.Geom(0);
+#if defined(WARPX_DIM_3D)
+    m_z_min = geom.ProbLo(2);
+    m_z_max = geom.ProbHi(2);
+#else
     m_z_min = geom.ProbLo(1);
     m_z_max = geom.ProbHi(1);
+#endif
     utils::parser::queryWithParser(pp_rd_name, "z_min", m_z_min);
     utils::parser::queryWithParser(pp_rd_name, "z_max", m_z_max);
 
@@ -135,6 +188,18 @@ CylindricalScreenFlux::CylindricalScreenFlux (const std::string& rd_name)
         SpeciesState state;
         state.m_index = i;
         state.m_name = species_names[i];
+        state.m_previous_radius_name =
+            "__" + m_rd_name + "_" + species_names[i] + "_previous_radius";
+        const auto real_names = species.GetRealSoANames();
+        const bool has_previous_radius =
+            std::find(
+                real_names.begin(), real_names.end(),
+                state.m_previous_radius_name) != real_names.end();
+        if (!has_previous_radius) {
+            const int communicate = 1;
+            mypc.GetParticleContainer(i).AddRealComp(
+                state.m_previous_radius_name, communicate);
+        }
         m_species.push_back(std::move(state));
     }
 
@@ -158,6 +223,7 @@ CylindricalScreenFlux::CylindricalScreenFlux (const std::string& rd_name)
             static_cast<std::size_t>(m_bins_z) *
             static_cast<std::size_t>(m_bins_energy) * ncomp;
         m_histogram.resize(histogram_size);
+        m_histogram_device.resize(histogram_size);
         ResetHistogram();
     }
 
@@ -269,13 +335,18 @@ CylindricalScreenFlux::HistogramIndex (
 
 void
 CylindricalScreenFlux::ComputeDiags (int step) {
-#if defined(WARPX_DIM_RZ)
+#if defined(WARPX_DIM_RZ) || defined(WARPX_DIM_XZ) || defined(WARPX_DIM_3D)
     auto& warpx = WarpX::GetInstance();
     const auto& mypc = warpx.GetPartContainer();
     const bool do_output = m_intervals.contains(step + 1);
+    const bool can_detect_crossing = m_has_previous_radius;
+    const bool write_events = can_detect_crossing && do_output && m_write_particles;
     const amrex::Real time = warpx.gett_new(0);
 
     while (m_histogram_enabled && time > m_interval_stop) {
+        amrex::Gpu::copy(
+            amrex::Gpu::deviceToHost, m_histogram_device.begin(),
+            m_histogram_device.end(), m_histogram.begin());
         amrex::ParallelDescriptor::ReduceRealSum(
             m_histogram.data(), static_cast<int>(m_histogram.size()),
             amrex::ParallelDescriptor::IOProcessorNumber());
@@ -291,7 +362,7 @@ CylindricalScreenFlux::ComputeDiags (int step) {
     }
 
     std::ofstream ofs;
-    if (do_output && m_write_particles) {
+    if (write_events) {
         ofs.open(m_file_name, std::ofstream::out | std::ofstream::app);
         ofs << std::fixed << std::setprecision(m_precision) << std::scientific;
     }
@@ -304,19 +375,18 @@ CylindricalScreenFlux::ComputeDiags (int step) {
         const amrex::ParticleReal joule_to_eV =
             amrex::ParticleReal(1.0) / PhysConst::q_e;
 
-        std::map<std::uint64_t, amrex::ParticleReal> current_r;
-
         const int nlevs = std::max(0, myspc.finestLevel() + 1);
         for (int lev = 0; lev < nlevs; ++lev) {
             for (WarpXParIter pti(myspc, lev); pti.isValid(); ++pti) {
                 const auto& soa = pti.GetStructOfArrays();
                 const auto& attribs = pti.GetAttribs();
+                const long np = pti.numParticles();
+                if (np == 0) {
+                    continue;
+                }
+
                 const auto* const AMREX_RESTRICT idcpu =
                     soa.GetIdCPUData().data();
-                const auto* const AMREX_RESTRICT r =
-                    attribs[PIdx::r].dataPtr();
-                const auto* const AMREX_RESTRICT z =
-                    attribs[PIdx::z].dataPtr();
                 const auto* const AMREX_RESTRICT w =
                     attribs[PIdx::w].dataPtr();
                 const auto* const AMREX_RESTRICT ux =
@@ -325,132 +395,262 @@ CylindricalScreenFlux::ComputeDiags (int step) {
                     attribs[PIdx::uy].dataPtr();
                 const auto* const AMREX_RESTRICT uz =
                     attribs[PIdx::uz].dataPtr();
+
+                auto* const AMREX_RESTRICT previous_radius =
+                    pti.GetAttribs(species_state.m_previous_radius_name).dataPtr();
+#if defined(WARPX_DIM_RZ)
+                const auto* const AMREX_RESTRICT r = attribs[PIdx::r].dataPtr();
+                const auto* const AMREX_RESTRICT z = attribs[PIdx::z].dataPtr();
                 const auto* const AMREX_RESTRICT theta =
                     attribs[PIdx::theta].dataPtr();
+#elif defined(WARPX_DIM_XZ)
+                const auto* const AMREX_RESTRICT x = attribs[PIdx::x].dataPtr();
+                const auto* const AMREX_RESTRICT z = attribs[PIdx::z].dataPtr();
+#elif defined(WARPX_DIM_3D)
+                const auto* const AMREX_RESTRICT x = attribs[PIdx::x].dataPtr();
+                const auto* const AMREX_RESTRICT y = attribs[PIdx::y].dataPtr();
+                const auto* const AMREX_RESTRICT z = attribs[PIdx::z].dataPtr();
+#endif
 
-                const long np = pti.numParticles();
-                amrex::Gpu::HostVector<std::uint64_t> h_idcpu(np);
-                amrex::Gpu::HostVector<amrex::ParticleReal> h_r(np);
-                amrex::Gpu::HostVector<amrex::ParticleReal> h_z(np);
-                amrex::Gpu::HostVector<amrex::ParticleReal> h_w(np);
-                amrex::Gpu::HostVector<amrex::ParticleReal> h_ux(np);
-                amrex::Gpu::HostVector<amrex::ParticleReal> h_uy(np);
-                amrex::Gpu::HostVector<amrex::ParticleReal> h_uz(np);
-                amrex::Gpu::HostVector<amrex::ParticleReal> h_theta(np);
+                amrex::Gpu::DeviceVector<ScreenEvent> events;
+                amrex::Gpu::DeviceVector<int> event_count;
+                ScreenEvent* event_data = nullptr;
+                int* event_count_data = nullptr;
+                if (write_events) {
+                    events.resize(np);
+                    event_count.resize(1, 0);
+                    event_data = events.dataPtr();
+                    event_count_data = event_count.dataPtr();
+                }
 
-                amrex::Gpu::copy(
-                    amrex::Gpu::deviceToHost, idcpu, idcpu + np, h_idcpu.begin());
-                amrex::Gpu::copy(amrex::Gpu::deviceToHost, r, r + np, h_r.begin());
-                amrex::Gpu::copy(amrex::Gpu::deviceToHost, z, z + np, h_z.begin());
-                amrex::Gpu::copy(amrex::Gpu::deviceToHost, w, w + np, h_w.begin());
-                amrex::Gpu::copy(
-                    amrex::Gpu::deviceToHost, ux, ux + np, h_ux.begin());
-                amrex::Gpu::copy(
-                    amrex::Gpu::deviceToHost, uy, uy + np, h_uy.begin());
-                amrex::Gpu::copy(
-                    amrex::Gpu::deviceToHost, uz, uz + np, h_uz.begin());
-                amrex::Gpu::copy(
-                    amrex::Gpu::deviceToHost, theta, theta + np, h_theta.begin());
+                amrex::Real* const histogram =
+                    m_histogram_enabled ? m_histogram_device.dataPtr() : nullptr;
+                const bool histogram_enabled = m_histogram_enabled;
+                const bool histogram_active =
+                    can_detect_crossing && m_histogram_enabled &&
+                    time <= m_interval_stop;
 
-                for (long i = 0; i < np; ++i) {
-                    const std::uint64_t packed_id = h_idcpu[i];
-                    const amrex::ConstParticleIDWrapper pid{h_idcpu[i]};
-                    if (!pid.is_valid()) {
-                        continue;
-                    }
+                const auto r0 = m_r0;
+#if defined(WARPX_DIM_XZ) || defined(WARPX_DIM_3D)
+                const auto center_x = m_center_x;
+#endif
+#if defined(WARPX_DIM_3D)
+                const auto center_y = m_center_y;
+#endif
+                const auto z_min = m_z_min;
+                const auto z_max = m_z_max;
+                const auto energy_min = m_energy_min;
+                const auto energy_max = m_energy_max;
+                const int bins_theta = m_bins_theta;
+                const int bins_z = m_bins_z;
+                const int bins_energy = m_bins_energy;
+#if defined(WARPX_DIM_XZ)
+                const bool two_sided_2d = m_two_sided_2d;
+                const auto theta_2d = m_theta_2d;
+#endif
+                const bool detect_crossing = can_detect_crossing;
+                constexpr int ncomp = 2;
 
-                    const amrex::ParticleReal r_new = h_r[i];
-                    current_r[packed_id] = r_new;
+                amrex::ParallelFor(
+                    np,
+                    [=] AMREX_GPU_DEVICE (long i)
+                    {
+                        const amrex::ConstParticleIDWrapper pid{idcpu[i]};
+                        if (!pid.is_valid()) {
+                            return;
+                        }
 
-                    if (h_z[i] < m_z_min || h_z[i] > m_z_max) {
-                        continue;
-                    }
+                        amrex::ParticleReal x_event = 0.0;
+                        amrex::ParticleReal y_event = 0.0;
+                        amrex::ParticleReal z_event = 0.0;
+                        amrex::ParticleReal r_new = 0.0;
+                        amrex::ParticleReal theta_event = 0.0;
+                        bool crossed = false;
 
-                    const auto prev =
-                        species_state.m_previous_r.find(packed_id);
-                    if (prev == species_state.m_previous_r.end()) {
-                        continue;
-                    }
+#if defined(WARPX_DIM_RZ)
+                        r_new = r[i];
+                        theta_event = NormalizeTheta(theta[i]);
+                        z_event = z[i];
+                        x_event = r_new * std::cos(theta_event);
+                        y_event = r_new * std::sin(theta_event);
+                        const amrex::ParticleReal ur =
+                            ux[i] * std::cos(theta_event) +
+                            uy[i] * std::sin(theta_event);
+                        const amrex::ParticleReal r_old = previous_radius[i];
+                        previous_radius[i] = r_new;
+                        crossed = detect_crossing &&
+                                  r_old >= r0 && r_new <= r0 &&
+                                  ur < amrex::ParticleReal(0.0);
+#elif defined(WARPX_DIM_XZ)
+                        const amrex::ParticleReal signed_r_new = x[i] - center_x;
+                        const amrex::ParticleReal signed_r_old = previous_radius[i];
+                        previous_radius[i] = signed_r_new;
+                        z_event = z[i];
+                        x_event = x[i];
+                        y_event = 0.0;
+                        r_new = amrex::Math::abs(signed_r_new);
 
-                    const amrex::ParticleReal r_old = prev->second;
-                    const amrex::ParticleReal ur =
-                        h_ux[i] * std::cos(h_theta[i]) +
-                        h_uy[i] * std::sin(h_theta[i]);
-                    if (r_old < m_r0 || r_new > m_r0 ||
-                        ur >= amrex::ParticleReal(0.0)) {
-                        continue;
-                    }
+                        const bool crossed_right =
+                            detect_crossing && signed_r_old >= r0 &&
+                            signed_r_new <= r0 &&
+                            ux[i] < amrex::ParticleReal(0.0);
+                        const bool crossed_left =
+                            detect_crossing && two_sided_2d &&
+                            signed_r_old <= -r0 &&
+                            signed_r_new >= -r0 && ux[i] > amrex::ParticleReal(0.0);
+                        crossed = crossed_right || crossed_left;
+                        theta_event = crossed_left
+                                          ? NormalizeTheta(
+                                                theta_2d +
+                                                amrex::ParticleReal(
+                                                    3.141592653589793238462643383279502884))
+                                          : theta_2d;
+#elif defined(WARPX_DIM_3D)
+                        const amrex::ParticleReal dx = x[i] - center_x;
+                        const amrex::ParticleReal dy = y[i] - center_y;
+                        r_new = std::sqrt(dx * dx + dy * dy);
+                        const amrex::ParticleReal inv_r =
+                            r_new > amrex::ParticleReal(0.0)
+                                ? amrex::ParticleReal(1.0) / r_new
+                                : amrex::ParticleReal(0.0);
+                        const amrex::ParticleReal costheta =
+                            r_new > amrex::ParticleReal(0.0)
+                                ? dx * inv_r
+                                : amrex::ParticleReal(1.0);
+                        const amrex::ParticleReal sintheta =
+                            r_new > amrex::ParticleReal(0.0)
+                                ? dy * inv_r
+                                : amrex::ParticleReal(0.0);
+                        theta_event = std::atan2(dy, dx);
+                        z_event = z[i];
+                        x_event = x[i];
+                        y_event = y[i];
+                        const amrex::ParticleReal ur =
+                            ux[i] * costheta + uy[i] * sintheta;
+                        const amrex::ParticleReal r_old = previous_radius[i];
+                        previous_radius[i] = r_new;
+                        crossed = detect_crossing &&
+                                  r_old >= r0 && r_new <= r0 &&
+                                  ur < amrex::ParticleReal(0.0);
+#endif
 
-                    const amrex::ParticleReal x = r_new * std::cos(h_theta[i]);
-                    const amrex::ParticleReal y = r_new * std::sin(h_theta[i]);
-                    const amrex::ParticleReal usq =
-                        h_ux[i] * h_ux[i] + h_uy[i] * h_uy[i] +
-                        h_uz[i] * h_uz[i];
-                    const amrex::ParticleReal gamma = std::sqrt(
-                        amrex::ParticleReal(1.0) + usq * PhysConst::inv_c2);
-                    const amrex::ParticleReal px = mass * h_ux[i];
-                    const amrex::ParticleReal py = mass * h_uy[i];
-                    const amrex::ParticleReal pz = mass * h_uz[i];
-                    const amrex::ParticleReal ke_eV =
-                        (gamma - amrex::ParticleReal(1.0)) * mass *
-                        PhysConst::c * PhysConst::c * joule_to_eV;
+                        if (!crossed || z_event < z_min || z_event > z_max) {
+                            return;
+                        }
 
-                    if (do_output && m_write_particles) {
-                        ofs << step + 1 << m_sep;
-                        ofs << time << m_sep;
-                        ofs << species_state.m_name << m_sep;
-                        ofs << static_cast<amrex::Long>(pid) << m_sep;
-                        ofs << x << m_sep;
-                        ofs << y << m_sep;
-                        ofs << h_z[i] << m_sep;
-                        ofs << r_new << m_sep;
-                        ofs << h_theta[i] << m_sep;
-                        ofs << px << m_sep;
-                        ofs << py << m_sep;
-                        ofs << pz << m_sep;
-                        ofs << ke_eV << m_sep;
-                        ofs << h_ux[i] << m_sep;
-                        ofs << h_uy[i] << m_sep;
-                        ofs << h_uz[i] << m_sep;
-                        ofs << h_w[i] << "\n";
-                    }
+                        const amrex::ParticleReal usq =
+                            ux[i] * ux[i] + uy[i] * uy[i] + uz[i] * uz[i];
+                        const amrex::ParticleReal gamma = std::sqrt(
+                            amrex::ParticleReal(1.0) + usq * PhysConst::inv_c2);
+                        const amrex::ParticleReal ke_eV =
+                            (gamma - amrex::ParticleReal(1.0)) * mass *
+                            PhysConst::c * PhysConst::c * joule_to_eV;
 
-                    if (m_histogram_enabled && time <= m_interval_stop) {
-                        constexpr amrex::Real pi =
-                            3.141592653589793238462643383279502884;
-                        const amrex::Real theta_norm =
-                            (h_theta[i] + pi) / (2.0 * pi);
-                        const amrex::Real z_norm =
-                            (h_z[i] - m_z_min) / (m_z_max - m_z_min);
-                        const amrex::Real energy_norm =
-                            (ke_eV - m_energy_min) /
-                            (m_energy_max - m_energy_min);
-                        const int theta_bin =
-                            static_cast<int>(std::floor(theta_norm * m_bins_theta));
-                        const int z_bin =
-                            static_cast<int>(std::floor(z_norm * m_bins_z));
-                        const int energy_bin =
-                            static_cast<int>(std::floor(energy_norm * m_bins_energy));
+                        if (histogram_active) {
+                            constexpr amrex::Real pi =
+                                3.141592653589793238462643383279502884;
+                            const amrex::Real theta_norm =
+                                (static_cast<amrex::Real>(theta_event) + pi) /
+                                (2.0 * pi);
+                            const amrex::Real z_norm =
+                                (static_cast<amrex::Real>(z_event) - z_min) /
+                                (z_max - z_min);
+                            const amrex::Real energy_norm =
+                                (static_cast<amrex::Real>(ke_eV) - energy_min) /
+                                (energy_max - energy_min);
+                            const int theta_bin = static_cast<int>(
+                                amrex::Math::floor(theta_norm * bins_theta));
+                            const int z_bin = static_cast<int>(
+                                amrex::Math::floor(z_norm * bins_z));
+                            const int energy_bin = static_cast<int>(
+                                amrex::Math::floor(energy_norm * bins_energy));
 
-                        if (theta_bin >= 0 && theta_bin < m_bins_theta &&
-                            z_bin >= 0 && z_bin < m_bins_z &&
-                            energy_bin >= 0 && energy_bin < m_bins_energy) {
-                            m_histogram[HistogramIndex(
-                                species_counter, theta_bin, z_bin, energy_bin, 0)] +=
-                                static_cast<amrex::Real>(h_w[i]);
-                            m_histogram[HistogramIndex(
-                                species_counter, theta_bin, z_bin, energy_bin, 1)] +=
-                                1.0;
+                            if (theta_bin >= 0 && theta_bin < bins_theta &&
+                                z_bin >= 0 && z_bin < bins_z &&
+                                energy_bin >= 0 && energy_bin < bins_energy) {
+                                const std::size_t histogram_index =
+                                    static_cast<std::size_t>(
+                                        (((species_counter * bins_theta + theta_bin) *
+                                              bins_z +
+                                          z_bin) *
+                                             bins_energy +
+                                         energy_bin) *
+                                            ncomp);
+                                amrex::Gpu::Atomic::AddNoRet(
+                                    &histogram[histogram_index],
+                                    static_cast<amrex::Real>(w[i]));
+                                amrex::Gpu::Atomic::AddNoRet(
+                                    &histogram[histogram_index + 1],
+                                    amrex::Real(1.0));
+                            }
+                        } else if (histogram_enabled) {
+                            amrex::ignore_unused(histogram);
+                        }
+
+                        if (event_data != nullptr) {
+                            const int event_index =
+                                amrex::Gpu::Atomic::Add(event_count_data, 1);
+                            event_data[event_index] = ScreenEvent{
+                                idcpu[i],
+                                x_event,
+                                y_event,
+                                z_event,
+                                r_new,
+                                theta_event,
+                                mass * ux[i],
+                                mass * uy[i],
+                                mass * uz[i],
+                                ke_eV,
+                                ux[i],
+                                uy[i],
+                                uz[i],
+                                w[i]};
+                        }
+                    });
+
+                if (write_events) {
+                    amrex::Gpu::HostVector<int> h_event_count(1);
+                    amrex::Gpu::copy(
+                        amrex::Gpu::deviceToHost, event_count.begin(),
+                        event_count.end(), h_event_count.begin());
+                    const int num_events = h_event_count[0];
+                    if (num_events > 0) {
+                        amrex::Gpu::HostVector<ScreenEvent> h_events(num_events);
+                        amrex::Gpu::copy(
+                            amrex::Gpu::deviceToHost, events.begin(),
+                            events.begin() + num_events, h_events.begin());
+                        for (const auto& event : h_events) {
+                            const amrex::ConstParticleIDWrapper pid{
+                                event.m_packed_id};
+                            ofs << step + 1 << m_sep;
+                            ofs << time << m_sep;
+                            ofs << species_state.m_name << m_sep;
+                            ofs << static_cast<amrex::Long>(pid) << m_sep;
+                            ofs << event.m_x << m_sep;
+                            ofs << event.m_y << m_sep;
+                            ofs << event.m_z << m_sep;
+                            ofs << event.m_r << m_sep;
+                            ofs << event.m_theta << m_sep;
+                            ofs << event.m_px << m_sep;
+                            ofs << event.m_py << m_sep;
+                            ofs << event.m_pz << m_sep;
+                            ofs << event.m_ke_eV << m_sep;
+                            ofs << event.m_ux << m_sep;
+                            ofs << event.m_uy << m_sep;
+                            ofs << event.m_uz << m_sep;
+                            ofs << event.m_w << "\n";
                         }
                     }
                 }
             }
         }
-
-        species_state.m_previous_r = std::move(current_r);
     }
+    m_has_previous_radius = true;
 
     if (m_histogram_enabled && time >= m_interval_stop) {
+        amrex::Gpu::copy(
+            amrex::Gpu::deviceToHost, m_histogram_device.begin(),
+            m_histogram_device.end(), m_histogram.begin());
         amrex::ParallelDescriptor::ReduceRealSum(
             m_histogram.data(), static_cast<int>(m_histogram.size()),
             amrex::ParallelDescriptor::IOProcessorNumber());
@@ -476,6 +676,11 @@ void
 CylindricalScreenFlux::ResetHistogram ()
 {
     std::fill(m_histogram.begin(), m_histogram.end(), 0.0);
+    if (!m_histogram_device.empty()) {
+        amrex::Gpu::copy(
+            amrex::Gpu::hostToDevice, m_histogram.begin(), m_histogram.end(),
+            m_histogram_device.begin());
+    }
 }
 
 void

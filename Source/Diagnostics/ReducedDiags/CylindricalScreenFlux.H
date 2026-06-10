@@ -10,15 +10,18 @@
 
 #include "ReducedDiags.H"
 
+#include <AMReX_GpuContainers.H>
 #include <AMReX_REAL.H>
 
 #include <cstdint>
-#include <map>
 #include <string>
 #include <vector>
 
 /**
- * Records particles that cross a cylindrical screen in RZ while moving inward.
+ * Records particles that cross a cylindrical screen while moving inward.
+ *
+ * In RZ and 3D, the screen is a cylinder. In 2D XZ, it is the fixed-theta
+ * cross-section of that cylinder: one or two planar screens at x = x0 +/- r0.
  */
 class CylindricalScreenFlux : public ReducedDiags {
   public:
@@ -46,7 +49,7 @@ class CylindricalScreenFlux : public ReducedDiags {
     struct SpeciesState {
         int m_index = -1;
         std::string m_name;
-        std::map<std::uint64_t, amrex::ParticleReal> m_previous_r;
+        std::string m_previous_radius_name;
     };
 
     void WriteParticleHeader () const;
@@ -65,13 +68,18 @@ class CylindricalScreenFlux : public ReducedDiags {
     void ResetHistogram ();
 
     amrex::ParticleReal m_r0 = 0.0;
+    amrex::ParticleReal m_center_x = 0.0;
+    amrex::ParticleReal m_center_y = 0.0;
     amrex::ParticleReal m_z_min = 0.0;
     amrex::ParticleReal m_z_max = 0.0;
+    amrex::ParticleReal m_theta_2d = 0.0;
     std::string m_file_name;
     std::string m_histogram_file_name;
     bool m_write_particles = true;
     bool m_histogram_enabled = false;
     bool m_write_histogram_header = false;
+    bool m_two_sided_2d = true;
+    bool m_has_previous_radius = false;
     int m_bins_theta = 0;
     int m_bins_z = 0;
     int m_bins_energy = 0;
@@ -83,6 +91,7 @@ class CylindricalScreenFlux : public ReducedDiags {
     amrex::ParticleReal m_energy_max = 0.0;
     std::vector<SpeciesState> m_species;
     std::vector<amrex::Real> m_histogram;
+    amrex::Gpu::DeviceVector<amrex::Real> m_histogram_device;
 };
 
 #endif

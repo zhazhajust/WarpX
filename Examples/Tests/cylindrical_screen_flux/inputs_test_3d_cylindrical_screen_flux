@@ -1,0 +1,43 @@
+# Copyright 2026
+#
+# Test a reduced diagnostic that records inward 3D cylindrical screen crossings.
+
+max_step = 3
+
+amr.n_cell = 16 16 16
+amr.max_grid_size = 16
+amr.max_level = 0
+
+geometry.dims = 3
+geometry.prob_lo = -1.0 -1.0 -1.0
+geometry.prob_hi =  1.0  1.0  1.0
+
+boundary.field_lo = none none periodic
+boundary.field_hi = none none periodic
+boundary.particle_lo = absorbing absorbing periodic
+boundary.particle_hi = absorbing absorbing periodic
+
+warpx.const_dt = 3.0e-9
+warpx.serialize_initial_conditions = 1
+warpx.verbose = 1
+
+algo.current_deposition = direct
+algo.field_gathering = energy-conserving
+algo.particle_shape = 1
+
+particles.species_names = electrons
+
+electrons.charge = -q_e
+electrons.mass = m_e
+electrons.injection_style = SingleParticle
+electrons.single_particle_pos = 0.75 0.0 0.0
+electrons.single_particle_u = -0.16 0.0 0.0
+electrons.single_particle_weight = 4.0
+electrons.do_not_deposit = 1
+
+warpx.reduced_diags_names = screen
+screen.type = CylindricalScreenFlux
+screen.intervals = 1
+screen.r0 = 0.5
+screen.species = electrons
+screen.file_name = diags/reducedfiles/screen.csv
