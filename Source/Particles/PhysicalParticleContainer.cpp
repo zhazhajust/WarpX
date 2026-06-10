@@ -313,7 +313,6 @@ PhysicalParticleContainer::PhysicalParticleContainer (AmrCore* amr_core, int isp
     pp_species_name.query("save_previous_position", m_save_previous_position);
     auto* fourier_radiation = WarpX::GetInstance().GetFourierRadiation();
     if (fourier_radiation && fourier_radiation->IsSpeciesSelected(species_name)) {
-        m_save_previous_position = true;
         m_do_fourier_radiation = true;
         m_fourier_radiation_filter_is_latched = fourier_radiation->ParticleFilterIsLatched();
     }
@@ -1546,6 +1545,9 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
     {
         amrex::ParticleReal xp, yp, zp;
         getPosition(ip, xp, yp, zp);
+        const amrex::ParticleReal xp_prev = xp;
+        const amrex::ParticleReal yp_prev = yp;
+        const amrex::ParticleReal zp_prev = zp;
 
         if (save_previous_position) {
 #if !defined(WARPX_DIM_1D_Z)
@@ -1680,9 +1682,9 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
                 const Real ay = (betay_new - betay_prev) * dt_inv;
                 const Real az = (betaz_new - betaz_prev) * dt_inv;
 
-                const Real x_mid = 0.5_rt * (x_old[ip] + xp);
-                const Real y_mid = 0.5_rt * (y_old[ip] + yp);
-                const Real z_mid = 0.5_rt * (z_old[ip] + zp);
+                const Real x_mid = 0.5_rt * (xp_prev + xp);
+                const Real y_mid = 0.5_rt * (yp_prev + yp);
+                const Real z_mid = 0.5_rt * (zp_prev + zp);
 
                 for (int gti = 0; gti < radiation_n_total; ++gti) {
                     const int i_phi = gti / (radiation_n_omega * radiation_n_theta);

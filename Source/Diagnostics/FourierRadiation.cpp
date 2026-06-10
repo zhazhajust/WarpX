@@ -43,8 +43,8 @@ FourierRadiation::FourierRadiation ()
     }
     m_enabled = true;
 
-#if !defined(WARPX_DIM_3D)
-    WARPX_ABORT_WITH_MESSAGE("Inline Fourier radiation is currently implemented only for 3D.");
+#if !defined(WARPX_DIM_3D) && !defined(WARPX_DIM_RZ)
+    WARPX_ABORT_WITH_MESSAGE("Inline Fourier radiation is currently implemented only for 3D and RZ.");
 #endif
 
     ParmParse const pp_fr(rd_name);
