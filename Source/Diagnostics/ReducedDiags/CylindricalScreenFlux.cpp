@@ -16,6 +16,7 @@
 #include "WarpX.H"
 
 #include <AMReX.H>
+#include <AMReX_GpuContainers.H>
 #include <AMReX_GpuControl.H>
 #include <AMReX_ParallelDescriptor.H>
 #include <AMReX_ParmParse.H>
@@ -312,9 +313,12 @@ CylindricalScreenFlux::ComputeDiags (int step) {
                 const auto& attribs = pti.GetAttribs();
                 const auto* const AMREX_RESTRICT idcpu =
                     soa.GetIdCPUData().data();
-                const auto* const AMREX_RESTRICT r = attribs[PIdx::r].dataPtr();
-                const auto* const AMREX_RESTRICT z = attribs[PIdx::z].dataPtr();
-                const auto* const AMREX_RESTRICT w = attribs[PIdx::w].dataPtr();
+                const auto* const AMREX_RESTRICT r =
+                    attribs[PIdx::r].dataPtr();
+                const auto* const AMREX_RESTRICT z =
+                    attribs[PIdx::z].dataPtr();
+                const auto* const AMREX_RESTRICT w =
+                    attribs[PIdx::w].dataPtr();
                 const auto* const AMREX_RESTRICT ux =
                     attribs[PIdx::ux].dataPtr();
                 const auto* const AMREX_RESTRICT uy =
@@ -325,17 +329,40 @@ CylindricalScreenFlux::ComputeDiags (int step) {
                     attribs[PIdx::theta].dataPtr();
 
                 const long np = pti.numParticles();
+                amrex::Gpu::HostVector<std::uint64_t> h_idcpu(np);
+                amrex::Gpu::HostVector<amrex::ParticleReal> h_r(np);
+                amrex::Gpu::HostVector<amrex::ParticleReal> h_z(np);
+                amrex::Gpu::HostVector<amrex::ParticleReal> h_w(np);
+                amrex::Gpu::HostVector<amrex::ParticleReal> h_ux(np);
+                amrex::Gpu::HostVector<amrex::ParticleReal> h_uy(np);
+                amrex::Gpu::HostVector<amrex::ParticleReal> h_uz(np);
+                amrex::Gpu::HostVector<amrex::ParticleReal> h_theta(np);
+
+                amrex::Gpu::copy(
+                    amrex::Gpu::deviceToHost, idcpu, idcpu + np, h_idcpu.begin());
+                amrex::Gpu::copy(amrex::Gpu::deviceToHost, r, r + np, h_r.begin());
+                amrex::Gpu::copy(amrex::Gpu::deviceToHost, z, z + np, h_z.begin());
+                amrex::Gpu::copy(amrex::Gpu::deviceToHost, w, w + np, h_w.begin());
+                amrex::Gpu::copy(
+                    amrex::Gpu::deviceToHost, ux, ux + np, h_ux.begin());
+                amrex::Gpu::copy(
+                    amrex::Gpu::deviceToHost, uy, uy + np, h_uy.begin());
+                amrex::Gpu::copy(
+                    amrex::Gpu::deviceToHost, uz, uz + np, h_uz.begin());
+                amrex::Gpu::copy(
+                    amrex::Gpu::deviceToHost, theta, theta + np, h_theta.begin());
+
                 for (long i = 0; i < np; ++i) {
-                    const std::uint64_t packed_id = idcpu[i];
-                    const amrex::ConstParticleIDWrapper pid{idcpu[i]};
+                    const std::uint64_t packed_id = h_idcpu[i];
+                    const amrex::ConstParticleIDWrapper pid{h_idcpu[i]};
                     if (!pid.is_valid()) {
                         continue;
                     }
 
-                    const amrex::ParticleReal r_new = r[i];
+                    const amrex::ParticleReal r_new = h_r[i];
                     current_r[packed_id] = r_new;
 
-                    if (z[i] < m_z_min || z[i] > m_z_max) {
+                    if (h_z[i] < m_z_min || h_z[i] > m_z_max) {
                         continue;
                     }
 
@@ -347,21 +374,23 @@ CylindricalScreenFlux::ComputeDiags (int step) {
 
                     const amrex::ParticleReal r_old = prev->second;
                     const amrex::ParticleReal ur =
-                        ux[i] * std::cos(theta[i]) + uy[i] * std::sin(theta[i]);
+                        h_ux[i] * std::cos(h_theta[i]) +
+                        h_uy[i] * std::sin(h_theta[i]);
                     if (r_old < m_r0 || r_new > m_r0 ||
                         ur >= amrex::ParticleReal(0.0)) {
                         continue;
                     }
 
-                    const amrex::ParticleReal x = r_new * std::cos(theta[i]);
-                    const amrex::ParticleReal y = r_new * std::sin(theta[i]);
+                    const amrex::ParticleReal x = r_new * std::cos(h_theta[i]);
+                    const amrex::ParticleReal y = r_new * std::sin(h_theta[i]);
                     const amrex::ParticleReal usq =
-                        ux[i] * ux[i] + uy[i] * uy[i] + uz[i] * uz[i];
+                        h_ux[i] * h_ux[i] + h_uy[i] * h_uy[i] +
+                        h_uz[i] * h_uz[i];
                     const amrex::ParticleReal gamma = std::sqrt(
                         amrex::ParticleReal(1.0) + usq * PhysConst::inv_c2);
-                    const amrex::ParticleReal px = mass * ux[i];
-                    const amrex::ParticleReal py = mass * uy[i];
-                    const amrex::ParticleReal pz = mass * uz[i];
+                    const amrex::ParticleReal px = mass * h_ux[i];
+                    const amrex::ParticleReal py = mass * h_uy[i];
+                    const amrex::ParticleReal pz = mass * h_uz[i];
                     const amrex::ParticleReal ke_eV =
                         (gamma - amrex::ParticleReal(1.0)) * mass *
                         PhysConst::c * PhysConst::c * joule_to_eV;
@@ -373,26 +402,26 @@ CylindricalScreenFlux::ComputeDiags (int step) {
                         ofs << static_cast<amrex::Long>(pid) << m_sep;
                         ofs << x << m_sep;
                         ofs << y << m_sep;
-                        ofs << z[i] << m_sep;
+                        ofs << h_z[i] << m_sep;
                         ofs << r_new << m_sep;
-                        ofs << theta[i] << m_sep;
+                        ofs << h_theta[i] << m_sep;
                         ofs << px << m_sep;
                         ofs << py << m_sep;
                         ofs << pz << m_sep;
                         ofs << ke_eV << m_sep;
-                        ofs << ux[i] << m_sep;
-                        ofs << uy[i] << m_sep;
-                        ofs << uz[i] << m_sep;
-                        ofs << w[i] << "\n";
+                        ofs << h_ux[i] << m_sep;
+                        ofs << h_uy[i] << m_sep;
+                        ofs << h_uz[i] << m_sep;
+                        ofs << h_w[i] << "\n";
                     }
 
                     if (m_histogram_enabled && time <= m_interval_stop) {
                         constexpr amrex::Real pi =
                             3.141592653589793238462643383279502884;
                         const amrex::Real theta_norm =
-                            (theta[i] + pi) / (2.0 * pi);
+                            (h_theta[i] + pi) / (2.0 * pi);
                         const amrex::Real z_norm =
-                            (z[i] - m_z_min) / (m_z_max - m_z_min);
+                            (h_z[i] - m_z_min) / (m_z_max - m_z_min);
                         const amrex::Real energy_norm =
                             (ke_eV - m_energy_min) /
                             (m_energy_max - m_energy_min);
@@ -408,7 +437,7 @@ CylindricalScreenFlux::ComputeDiags (int step) {
                             energy_bin >= 0 && energy_bin < m_bins_energy) {
                             m_histogram[HistogramIndex(
                                 species_counter, theta_bin, z_bin, energy_bin, 0)] +=
-                                static_cast<amrex::Real>(w[i]);
+                                static_cast<amrex::Real>(h_w[i]);
                             m_histogram[HistogramIndex(
                                 species_counter, theta_bin, z_bin, energy_bin, 1)] +=
                                 1.0;
