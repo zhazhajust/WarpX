@@ -119,8 +119,7 @@ using namespace amrex;
 
 PhysicalParticleContainer::PhysicalParticleContainer (AmrCore* amr_core, int ispecies,
                                                       const std::string& name)
-    : WarpXParticleContainer(amr_core, ispecies),
-      species_name(name)
+    : WarpXParticleContainer(amr_core, ispecies, name)
 {
     BackwardCompatibility();
 
@@ -411,7 +410,7 @@ PhysicalParticleContainer::AllocData ()
 }
 
 PhysicalParticleContainer::PhysicalParticleContainer (AmrCore* amr_core)
-    : WarpXParticleContainer(amr_core, 0)
+    : WarpXParticleContainer(amr_core, 0, "")
 {
 }
 
