@@ -1502,6 +1502,20 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
                                : amrex::ParserExecutor<8>{};
     const Real radiation_particle_fraction =
         (do_fourier_radiation) ? fourier_radiation->ParticleFraction() : 1._rt;
+    amrex::Gpu::DeviceVector<Real> radiation_x_prev_vec;
+    amrex::Gpu::DeviceVector<Real> radiation_y_prev_vec;
+    amrex::Gpu::DeviceVector<Real> radiation_z_prev_vec;
+    Real* AMREX_RESTRICT radiation_x_prev = nullptr;
+    Real* AMREX_RESTRICT radiation_y_prev = nullptr;
+    Real* AMREX_RESTRICT radiation_z_prev = nullptr;
+    if (do_fourier_radiation) {
+        radiation_x_prev_vec.resize(np_to_push);
+        radiation_y_prev_vec.resize(np_to_push);
+        radiation_z_prev_vec.resize(np_to_push);
+        radiation_x_prev = radiation_x_prev_vec.dataPtr();
+        radiation_y_prev = radiation_y_prev_vec.dataPtr();
+        radiation_z_prev = radiation_z_prev_vec.dataPtr();
+    }
 
     // local copies for device lambda capture
     const amrex::ParticleReal q = this->charge;
@@ -1545,9 +1559,6 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
     {
         amrex::ParticleReal xp, yp, zp;
         getPosition(ip, xp, yp, zp);
-        const amrex::ParticleReal xp_prev = xp;
-        const amrex::ParticleReal yp_prev = yp;
-        const amrex::ParticleReal zp_prev = zp;
 
         if (save_previous_position) {
 #if !defined(WARPX_DIM_1D_Z)
@@ -1561,6 +1572,9 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
 #endif
         }
         if (do_fourier_radiation) {
+            radiation_x_prev[ip] = xp;
+            radiation_y_prev[ip] = yp;
+            radiation_z_prev[ip] = zp;
             ux_old[ip] = ux[ip];
             uy_old[ip] = uy[ip];
             uz_old[ip] = uz[ip];
@@ -1625,22 +1639,38 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
             setPosition(ip, xp, yp, zp);
         }
 
-        if (do_fourier_radiation) {
-            const Real dt_inv = 1._rt / dt;
-            const Real ux_prev = ux_old[ip];
-            const Real uy_prev = uy_old[ip];
-            const Real uz_prev = uz_old[ip];
-            constexpr Real inv_c = 1._rt / PhysConst::c;
-            const Real gamma_inv_prev = amrex::Math::rsqrt(
-                1._rt + (ux_prev*ux_prev + uy_prev*uy_prev + uz_prev*uz_prev) * inv_c * inv_c);
-            const Real gamma_inv_new = amrex::Math::rsqrt(
-                1._rt + (ux[ip]*ux[ip] + uy[ip]*uy[ip] + uz[ip]*uz[ip]) * inv_c * inv_c);
+#ifdef WARPX_QED
+        [[maybe_unused]] auto foo_local_has_quantum_sync = local_has_quantum_sync;
+        [[maybe_unused]] auto *foo_podq = p_optical_depth_QSR;
+        [[maybe_unused]] const auto& foo_evolve_opt = evolve_opt; // have to do all these for nvcc
+        [[maybe_unused]] auto foo_qed_dt = qed_dt;
+        if constexpr (qed_control == has_qed) {
+            if (local_has_quantum_sync) {
+                evolve_opt(ux[ip], uy[ip], uz[ip],
+                           Exp, Eyp, Ezp,Bxp, Byp, Bzp,
+                           qed_dt, p_optical_depth_QSR[ip]);
+            }
+        }
+#else
+            amrex::ignore_unused(qed_control);
+#endif
+    });
+
+    if (do_fourier_radiation) {
+        amrex::Gpu::DeviceVector<long> radiation_mask(np_to_push);
+        amrex::Gpu::DeviceVector<long> radiation_offsets(np_to_push);
+        long* const AMREX_RESTRICT radiation_mask_ptr = radiation_mask.dataPtr();
+        long* const AMREX_RESTRICT radiation_offsets_ptr = radiation_offsets.dataPtr();
+
+        amrex::ParallelFor(np_to_push, [=] AMREX_GPU_DEVICE (long ip)
+        {
+            amrex::ParticleReal xp, yp, zp;
+            getPosition(ip, xp, yp, zp);
 
             bool add_fourier_radiation = true;
-            Real radiation_sampling_weight = 1._rt;
-            const Real uxp = ux[ip] * inv_c;
-            const Real uyp = uy[ip] * inv_c;
-            const Real uzp = uz[ip] * inv_c;
+            const Real uxp = ux[ip] / PhysConst::c;
+            const Real uyp = uy[ip] / PhysConst::c;
+            const Real uzp = uz[ip] / PhysConst::c;
             if (radiation_do_particle_filter) {
                 const bool particle_filter_passes =
                     radiation_particle_filter(radiation_time, xp, yp, zp, uxp, uyp, uzp, w[ip])
@@ -1660,14 +1690,59 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
                 hash = (hash ^ (hash >> 27)) * 0x94d049bb133111ebULL;
                 hash = hash ^ (hash >> 31);
                 constexpr Real inv_uint64_range = 1._rt / 18446744073709551616.0_rt;
-                if (static_cast<Real>(hash) * inv_uint64_range >= radiation_particle_fraction) {
-                    add_fourier_radiation = false;
-                } else {
-                    radiation_sampling_weight = 1._rt / radiation_particle_fraction;
-                }
+                add_fourier_radiation =
+                    static_cast<Real>(hash) * inv_uint64_range < radiation_particle_fraction;
             }
 
-            if (add_fourier_radiation) {
+            radiation_mask_ptr[ip] = add_fourier_radiation ? 1 : 0;
+        });
+
+        const long num_radiating_particles =
+            amrex::Scan::ExclusiveSum(np_to_push, radiation_mask_ptr, radiation_offsets_ptr);
+
+        if (num_radiating_particles > 0) {
+            amrex::Gpu::DeviceVector<long> radiation_particle_indices(num_radiating_particles);
+            long* const AMREX_RESTRICT radiation_particle_indices_ptr =
+                radiation_particle_indices.dataPtr();
+
+            amrex::ParallelFor(np_to_push, [=] AMREX_GPU_DEVICE (long ip)
+            {
+                if (radiation_mask_ptr[ip] != 0) {
+                    radiation_particle_indices_ptr[radiation_offsets_ptr[ip]] = ip;
+                }
+            });
+
+            const long radiation_work_size =
+                num_radiating_particles * static_cast<long>(radiation_n_total);
+            amrex::ParallelFor(radiation_work_size, [=] AMREX_GPU_DEVICE (long iwork)
+            {
+                const long active_i = iwork / radiation_n_total;
+                const int gti = static_cast<int>(iwork - active_i * radiation_n_total);
+                const long ip = radiation_particle_indices_ptr[active_i];
+
+                const int i_phi = gti / (radiation_n_omega * radiation_n_theta);
+                const int i_theta =
+                    (gti - i_phi * radiation_n_omega * radiation_n_theta) / radiation_n_omega;
+                const int i_omega =
+                    gti - i_phi * radiation_n_omega * radiation_n_theta
+                        - i_theta * radiation_n_omega;
+
+                const Real nx = radiation_sin_theta[i_theta] * radiation_cos_phi[i_phi];
+                const Real ny = radiation_sin_theta[i_theta] * radiation_sin_phi[i_phi];
+                const Real nz = radiation_cos_theta[i_theta];
+
+                constexpr Real inv_c = 1._rt / PhysConst::c;
+                const Real dt_inv = 1._rt / dt;
+                const Real ux_prev = ux_old[ip];
+                const Real uy_prev = uy_old[ip];
+                const Real uz_prev = uz_old[ip];
+                const Real gamma_inv_prev = amrex::Math::rsqrt(
+                    1._rt + (ux_prev*ux_prev + uy_prev*uy_prev + uz_prev*uz_prev)
+                    * inv_c * inv_c);
+                const Real gamma_inv_new = amrex::Math::rsqrt(
+                    1._rt + (ux[ip]*ux[ip] + uy[ip]*uy[ip] + uz[ip]*uz[ip])
+                    * inv_c * inv_c);
+
                 const Real betax_prev = ux_prev * inv_c * gamma_inv_prev;
                 const Real betay_prev = uy_prev * inv_c * gamma_inv_prev;
                 const Real betaz_prev = uz_prev * inv_c * gamma_inv_prev;
@@ -1682,71 +1757,48 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
                 const Real ay = (betay_new - betay_prev) * dt_inv;
                 const Real az = (betaz_new - betaz_prev) * dt_inv;
 
-                const Real x_mid = 0.5_rt * (xp_prev + xp);
-                const Real y_mid = 0.5_rt * (yp_prev + yp);
-                const Real z_mid = 0.5_rt * (zp_prev + zp);
-
-                for (int gti = 0; gti < radiation_n_total; ++gti) {
-                    const int i_phi = gti / (radiation_n_omega * radiation_n_theta);
-                    const int i_theta =
-                        (gti - i_phi * radiation_n_omega * radiation_n_theta) / radiation_n_omega;
-                    const int i_omega =
-                        gti - i_phi * radiation_n_omega * radiation_n_theta
-                            - i_theta * radiation_n_omega;
-
-                    const Real nx = radiation_sin_theta[i_theta] * radiation_cos_phi[i_phi];
-                    const Real ny = radiation_sin_theta[i_theta] * radiation_sin_phi[i_phi];
-                    const Real nz = radiation_cos_theta[i_theta];
-
-                    const Real c2_denom = 1._rt - (betax*nx + betay*ny + betaz*nz);
-                    if (amrex::Math::abs(c2_denom) <= std::numeric_limits<Real>::min()) {
-                        continue;
-                    }
-
-                    const Real c2 = 1._rt / c2_denom;
-                    const Real c1 = (ax*nx + ay*ny + az*nz) * c2 * c2;
-                    const Real amplitude_x = c1 * (nx - betax) - c2 * ax;
-                    const Real amplitude_y = c1 * (ny - betay) - c2 * ay;
-                    const Real amplitude_z = c1 * (nz - betaz) - c2 * az;
-
-                    const Real phase = radiation_omega[i_omega]
-                        * (radiation_time + 0.5_rt*dt
-                           - (x_mid*nx + y_mid*ny + z_mid*nz) * inv_c);
-                    const Real sin_phase = std::sin(phase);
-                    const Real cos_phase = std::cos(phase);
-                    const Real charge_weight_dt = w[ip] * q * dt * radiation_sampling_weight;
-
-                    amrex::HostDevice::Atomic::Add(
-                        &radiation_amp_x_re[gti], charge_weight_dt * amplitude_x * cos_phase);
-                    amrex::HostDevice::Atomic::Add(
-                        &radiation_amp_x_im[gti], charge_weight_dt * amplitude_x * sin_phase);
-                    amrex::HostDevice::Atomic::Add(
-                        &radiation_amp_y_re[gti], charge_weight_dt * amplitude_y * cos_phase);
-                    amrex::HostDevice::Atomic::Add(
-                        &radiation_amp_y_im[gti], charge_weight_dt * amplitude_y * sin_phase);
-                    amrex::HostDevice::Atomic::Add(
-                        &radiation_amp_z_re[gti], charge_weight_dt * amplitude_z * cos_phase);
-                    amrex::HostDevice::Atomic::Add(
-                        &radiation_amp_z_im[gti], charge_weight_dt * amplitude_z * sin_phase);
+                const Real c2_denom = 1._rt - (betax*nx + betay*ny + betaz*nz);
+                if (amrex::Math::abs(c2_denom) <= std::numeric_limits<Real>::min()) {
+                    return;
                 }
-            }
-        }
 
-#ifdef WARPX_QED
-        [[maybe_unused]] auto foo_local_has_quantum_sync = local_has_quantum_sync;
-        [[maybe_unused]] auto *foo_podq = p_optical_depth_QSR;
-        [[maybe_unused]] const auto& foo_evolve_opt = evolve_opt; // have to do all these for nvcc
-        if constexpr (qed_control == has_qed) {
-            if (local_has_quantum_sync) {
-                evolve_opt(ux[ip], uy[ip], uz[ip],
-                           Exp, Eyp, Ezp,Bxp, Byp, Bzp,
-                           dt, p_optical_depth_QSR[ip]);
-            }
+                const Real c2 = 1._rt / c2_denom;
+                const Real c1 = (ax*nx + ay*ny + az*nz) * c2 * c2;
+                const Real amplitude_x = c1 * (nx - betax) - c2 * ax;
+                const Real amplitude_y = c1 * (ny - betay) - c2 * ay;
+                const Real amplitude_z = c1 * (nz - betaz) - c2 * az;
+
+                amrex::ParticleReal xp, yp, zp;
+                getPosition(ip, xp, yp, zp);
+                const Real x_mid = 0.5_rt * (radiation_x_prev[ip] + xp);
+                const Real y_mid = 0.5_rt * (radiation_y_prev[ip] + yp);
+                const Real z_mid = 0.5_rt * (radiation_z_prev[ip] + zp);
+
+                const Real phase = radiation_omega[i_omega]
+                    * (radiation_time + 0.5_rt*dt
+                       - (x_mid*nx + y_mid*ny + z_mid*nz) * inv_c);
+                const Real sin_phase = std::sin(phase);
+                const Real cos_phase = std::cos(phase);
+                Real charge_weight_dt = w[ip] * q * dt;
+                if (radiation_particle_fraction < 1._rt) {
+                    charge_weight_dt /= radiation_particle_fraction;
+                }
+
+                amrex::HostDevice::Atomic::Add(
+                    &radiation_amp_x_re[gti], charge_weight_dt * amplitude_x * cos_phase);
+                amrex::HostDevice::Atomic::Add(
+                    &radiation_amp_x_im[gti], charge_weight_dt * amplitude_x * sin_phase);
+                amrex::HostDevice::Atomic::Add(
+                    &radiation_amp_y_re[gti], charge_weight_dt * amplitude_y * cos_phase);
+                amrex::HostDevice::Atomic::Add(
+                    &radiation_amp_y_im[gti], charge_weight_dt * amplitude_y * sin_phase);
+                amrex::HostDevice::Atomic::Add(
+                    &radiation_amp_z_re[gti], charge_weight_dt * amplitude_z * cos_phase);
+                amrex::HostDevice::Atomic::Add(
+                    &radiation_amp_z_im[gti], charge_weight_dt * amplitude_z * sin_phase);
+            });
         }
-#else
-            amrex::ignore_unused(qed_control);
-#endif
-    });
+    }
 }
 
 void
