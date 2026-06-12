@@ -10,9 +10,6 @@
 #include <AMReX_Math.H>
 #include <AMReX_ParallelDescriptor.H>
 #include <AMReX_ParmParse.H>
-#ifdef AMREX_USE_MPI
-#   include <mpi.h>
-#endif
 
 #include <algorithm>
 #include <cmath>
@@ -215,109 +212,16 @@ FourierRadiation::GetIntensity (std::vector<Real>& intensity) const
 }
 
 void
-FourierRadiation::AddLocalParticleRecords (
+FourierRadiation::AccumulateLocalParticleRecords (
     FourierRadiationParticleRecord const* records,
-    long const num_records)
-{
-    if (!m_enabled || num_records <= 0) {
-        return;
-    }
-
-    std::lock_guard<std::mutex> guard(m_local_particle_records_mutex);
-    m_local_particle_records.insert(
-        m_local_particle_records.end(), records, records + num_records);
-}
-
-void
-FourierRadiation::ClearLocalParticleRecords ()
-{
-    std::lock_guard<std::mutex> guard(m_local_particle_records_mutex);
-    m_local_particle_records.clear();
-}
-
-void
-FourierRadiation::ComputeGlobalWorkQueue (
+    Long const num_records,
     Real const dt,
     Real const charge,
     Real const radiation_time)
 {
-    if (!m_enabled) {
-        return;
-    }
+    if (!m_enabled || num_records <= 0) { return; }
 
-    Vector<FourierRadiationParticleRecord> local_records;
-    {
-        std::lock_guard<std::mutex> guard(m_local_particle_records_mutex);
-        local_records.assign(m_local_particle_records.begin(), m_local_particle_records.end());
-        m_local_particle_records.clear();
-    }
-
-    Vector<FourierRadiationParticleRecord> global_records;
-
-#ifdef AMREX_USE_MPI
-    const int nprocs = ParallelDescriptor::NProcs();
-    const int myproc = ParallelDescriptor::MyProc();
-    const auto local_count = static_cast<Long>(local_records.size());
-    Vector<Long> counts(nprocs, 0);
-    MPI_Allgather(
-        &local_count, 1, ParallelDescriptor::Mpi_typemap<Long>::type(),
-        counts.data(), 1, ParallelDescriptor::Mpi_typemap<Long>::type(),
-        ParallelDescriptor::Communicator());
-
-    Long global_count = 0;
-    for (Long const count : counts) {
-        global_count += count;
-    }
-    if (global_count == 0) {
-        return;
-    }
-
-    WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
-        global_count <= static_cast<Long>(std::numeric_limits<int>::max() /
-                                          sizeof(FourierRadiationParticleRecord)),
-        "FourierRadiation global work queue is too large for MPI_Allgatherv byte counts.");
-
-    Vector<int> recv_counts(nprocs, 0);
-    Vector<int> displs(nprocs, 0);
-    Long offset = 0;
-    for (int i = 0; i < nprocs; ++i) {
-        WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
-            counts[i] <= static_cast<Long>(std::numeric_limits<int>::max() /
-                                           sizeof(FourierRadiationParticleRecord)),
-            "FourierRadiation per-rank work queue is too large for MPI_Allgatherv.");
-        recv_counts[i] = static_cast<int>(counts[i] * sizeof(FourierRadiationParticleRecord));
-        displs[i] = static_cast<int>(offset * sizeof(FourierRadiationParticleRecord));
-        offset += counts[i];
-    }
-
-    global_records.resize(static_cast<std::size_t>(global_count));
-    MPI_Allgatherv(
-        local_records.data(),
-        static_cast<int>(local_count * sizeof(FourierRadiationParticleRecord)),
-        MPI_BYTE,
-        global_records.data(),
-        recv_counts.data(),
-        displs.data(),
-        MPI_BYTE,
-        ParallelDescriptor::Communicator());
-#else
-    const int nprocs = 1;
-    const int myproc = 0;
-    const auto global_count = static_cast<Long>(local_records.size());
-    if (global_count == 0) {
-        return;
-    }
-    global_records = std::move(local_records);
-#endif
-
-    Gpu::DeviceVector<FourierRadiationParticleRecord> device_records(global_records.size());
-    Gpu::copy(
-        Gpu::hostToDevice,
-        global_records.begin(),
-        global_records.end(),
-        device_records.begin());
-
-    FourierRadiationParticleRecord const* const records_ptr = device_records.dataPtr();
+    FourierRadiationParticleRecord const* const records_ptr = records;
     Real const* const AMREX_RESTRICT radiation_omega = m_omega_2pi.dataPtr();
     Real const* const AMREX_RESTRICT radiation_sin_theta = m_sin_theta.dataPtr();
     Real const* const AMREX_RESTRICT radiation_cos_theta = m_cos_theta.dataPtr();
@@ -334,19 +238,12 @@ FourierRadiation::ComputeGlobalWorkQueue (
     int const radiation_n_total = m_num_grid_nodes;
     Real const radiation_particle_fraction = m_particle_fraction;
 
-    Long const global_work_size = global_count * static_cast<Long>(radiation_n_total);
-    Long const work_begin = global_work_size * myproc / nprocs;
-    Long const work_end = global_work_size * (myproc + 1) / nprocs;
-    Long const local_work_size = work_end - work_begin;
-    if (local_work_size == 0) {
-        return;
-    }
+    Long const local_work_size = num_records * static_cast<Long>(radiation_n_total);
 
     amrex::ParallelFor(local_work_size, [=] AMREX_GPU_DEVICE (Long local_iwork)
     {
-        Long const iwork = work_begin + local_iwork;
-        Long const record_i = iwork / radiation_n_total;
-        int const gti = static_cast<int>(iwork - record_i * radiation_n_total);
+        Long const record_i = local_iwork / radiation_n_total;
+        int const gti = static_cast<int>(local_iwork - record_i * radiation_n_total);
         FourierRadiationParticleRecord const record = records_ptr[record_i];
 
         int const i_phi = gti / (radiation_n_omega * radiation_n_theta);
@@ -417,6 +314,7 @@ FourierRadiation::ComputeGlobalWorkQueue (
         amrex::HostDevice::Atomic::Add(
             &radiation_amp_z_im[gti], charge_weight_dt * amplitude_z * sin_phase);
     });
+    amrex::Gpu::streamSynchronize();
 }
 
 void

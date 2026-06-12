@@ -833,14 +833,6 @@ PhysicalParticleContainer::Evolve (ablastr::fields::MultiFabRegister& fields,
         }
     }
 
-    if (m_do_fourier_radiation &&
-        (position_push_type == PositionPushType::Full) &&
-        (momentum_push_type == MomentumPushType::Full))
-    {
-        auto* fourier_radiation = WarpX::GetInstance().GetFourierRadiation();
-        fourier_radiation->ComputeGlobalWorkQueue(dt, this->m_charge, WarpX::GetInstance().gett_new(lev));
-    }
-
     // Split particles at the end of the time step.
     // When subcycling is ON, the splitting is done on the last call to
     // PhysicalParticleContainer::Evolve on the finest level, i.e., at the
@@ -1723,15 +1715,12 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
                 }
             });
 
-            amrex::Gpu::HostVector<FourierRadiationParticleRecord> host_records(
-                num_radiating_particles);
-            amrex::Gpu::copy(
-                amrex::Gpu::deviceToHost,
-                radiation_records.begin(),
-                radiation_records.end(),
-                host_records.begin());
-            fourier_radiation->AddLocalParticleRecords(
-                host_records.data(), num_radiating_particles);
+            fourier_radiation->AccumulateLocalParticleRecords(
+                radiation_records.dataPtr(),
+                num_radiating_particles,
+                dt,
+                this->m_charge,
+                radiation_time);
         }
     }
 }
