@@ -833,6 +833,14 @@ PhysicalParticleContainer::Evolve (ablastr::fields::MultiFabRegister& fields,
         }
     }
 
+    if (m_do_fourier_radiation &&
+        (position_push_type == PositionPushType::Full) &&
+        (momentum_push_type == MomentumPushType::Full))
+    {
+        auto* fourier_radiation = WarpX::GetInstance().GetFourierRadiation();
+        fourier_radiation->ComputeGlobalWorkQueue(dt, this->m_charge, WarpX::GetInstance().gett_new(lev));
+    }
+
     // Split particles at the end of the time step.
     // When subcycling is ON, the splitting is done on the last call to
     // PhysicalParticleContainer::Evolve on the finest level, i.e., at the
@@ -1478,31 +1486,6 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
     }
 
     auto* fourier_radiation = WarpX::GetInstance().GetFourierRadiation();
-    const int radiation_n_omega = (do_fourier_radiation) ? fourier_radiation->NumOmega() : 0;
-    const int radiation_n_theta = (do_fourier_radiation) ? fourier_radiation->NumTheta() : 0;
-    const int radiation_n_total = (do_fourier_radiation) ? fourier_radiation->NumGridNodes() : 0;
-    const Real* const AMREX_RESTRICT radiation_omega =
-        (do_fourier_radiation) ? fourier_radiation->OmegaData() : nullptr;
-    const Real* const AMREX_RESTRICT radiation_sin_theta =
-        (do_fourier_radiation) ? fourier_radiation->SinThetaData() : nullptr;
-    const Real* const AMREX_RESTRICT radiation_cos_theta =
-        (do_fourier_radiation) ? fourier_radiation->CosThetaData() : nullptr;
-    const Real* const AMREX_RESTRICT radiation_sin_phi =
-        (do_fourier_radiation) ? fourier_radiation->SinPhiData() : nullptr;
-    const Real* const AMREX_RESTRICT radiation_cos_phi =
-        (do_fourier_radiation) ? fourier_radiation->CosPhiData() : nullptr;
-    Real* const AMREX_RESTRICT radiation_amp_x_re =
-        (do_fourier_radiation) ? fourier_radiation->AmpXReData() : nullptr;
-    Real* const AMREX_RESTRICT radiation_amp_x_im =
-        (do_fourier_radiation) ? fourier_radiation->AmpXImData() : nullptr;
-    Real* const AMREX_RESTRICT radiation_amp_y_re =
-        (do_fourier_radiation) ? fourier_radiation->AmpYReData() : nullptr;
-    Real* const AMREX_RESTRICT radiation_amp_y_im =
-        (do_fourier_radiation) ? fourier_radiation->AmpYImData() : nullptr;
-    Real* const AMREX_RESTRICT radiation_amp_z_re =
-        (do_fourier_radiation) ? fourier_radiation->AmpZReData() : nullptr;
-    Real* const AMREX_RESTRICT radiation_amp_z_im =
-        (do_fourier_radiation) ? fourier_radiation->AmpZImData() : nullptr;
     const Real radiation_time = WarpX::GetInstance().gett_new(lev);
     const bool radiation_do_particle_filter =
         (do_fourier_radiation) ? fourier_radiation->DoParticleFilter() : false;
@@ -1714,102 +1697,41 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
             amrex::Scan::ExclusiveSum(np_to_push, radiation_mask_ptr, radiation_offsets_ptr);
 
         if (num_radiating_particles > 0) {
-            amrex::Gpu::DeviceVector<long> radiation_particle_indices(num_radiating_particles);
-            long* const AMREX_RESTRICT radiation_particle_indices_ptr =
-                radiation_particle_indices.dataPtr();
+            amrex::Gpu::DeviceVector<FourierRadiationParticleRecord> radiation_records(
+                num_radiating_particles);
+            FourierRadiationParticleRecord* const AMREX_RESTRICT radiation_records_ptr =
+                radiation_records.dataPtr();
 
             amrex::ParallelFor(np_to_push, [=] AMREX_GPU_DEVICE (long ip)
             {
                 if (radiation_mask_ptr[ip] != 0) {
-                    radiation_particle_indices_ptr[radiation_offsets_ptr[ip]] = ip;
+                    amrex::ParticleReal xp, yp, zp;
+                    getPosition(ip, xp, yp, zp);
+
+                    const long record_i = radiation_offsets_ptr[ip];
+                    radiation_records_ptr[record_i] = FourierRadiationParticleRecord{
+                        0.5_rt * (radiation_x_prev[ip] + xp),
+                        0.5_rt * (radiation_y_prev[ip] + yp),
+                        0.5_rt * (radiation_z_prev[ip] + zp),
+                        ux_old[ip],
+                        uy_old[ip],
+                        uz_old[ip],
+                        ux[ip],
+                        uy[ip],
+                        uz[ip],
+                        w[ip]};
                 }
             });
 
-            const long radiation_work_size =
-                num_radiating_particles * static_cast<long>(radiation_n_total);
-            amrex::ParallelFor(radiation_work_size, [=] AMREX_GPU_DEVICE (long iwork)
-            {
-                const long active_i = iwork / radiation_n_total;
-                const int gti = static_cast<int>(iwork - active_i * radiation_n_total);
-                const long ip = radiation_particle_indices_ptr[active_i];
-
-                const int i_phi = gti / (radiation_n_omega * radiation_n_theta);
-                const int i_theta =
-                    (gti - i_phi * radiation_n_omega * radiation_n_theta) / radiation_n_omega;
-                const int i_omega =
-                    gti - i_phi * radiation_n_omega * radiation_n_theta
-                        - i_theta * radiation_n_omega;
-
-                const Real nx = radiation_sin_theta[i_theta] * radiation_cos_phi[i_phi];
-                const Real ny = radiation_sin_theta[i_theta] * radiation_sin_phi[i_phi];
-                const Real nz = radiation_cos_theta[i_theta];
-
-                constexpr Real inv_c = 1._rt / PhysConst::c;
-                const Real dt_inv = 1._rt / dt;
-                const Real ux_prev = ux_old[ip];
-                const Real uy_prev = uy_old[ip];
-                const Real uz_prev = uz_old[ip];
-                const Real gamma_inv_prev = amrex::Math::rsqrt(
-                    1._rt + (ux_prev*ux_prev + uy_prev*uy_prev + uz_prev*uz_prev)
-                    * inv_c * inv_c);
-                const Real gamma_inv_new = amrex::Math::rsqrt(
-                    1._rt + (ux[ip]*ux[ip] + uy[ip]*uy[ip] + uz[ip]*uz[ip])
-                    * inv_c * inv_c);
-
-                const Real betax_prev = ux_prev * inv_c * gamma_inv_prev;
-                const Real betay_prev = uy_prev * inv_c * gamma_inv_prev;
-                const Real betaz_prev = uz_prev * inv_c * gamma_inv_prev;
-                const Real betax_new = ux[ip] * inv_c * gamma_inv_new;
-                const Real betay_new = uy[ip] * inv_c * gamma_inv_new;
-                const Real betaz_new = uz[ip] * inv_c * gamma_inv_new;
-
-                const Real betax = 0.5_rt * (betax_prev + betax_new);
-                const Real betay = 0.5_rt * (betay_prev + betay_new);
-                const Real betaz = 0.5_rt * (betaz_prev + betaz_new);
-                const Real ax = (betax_new - betax_prev) * dt_inv;
-                const Real ay = (betay_new - betay_prev) * dt_inv;
-                const Real az = (betaz_new - betaz_prev) * dt_inv;
-
-                const Real c2_denom = 1._rt - (betax*nx + betay*ny + betaz*nz);
-                if (amrex::Math::abs(c2_denom) <= std::numeric_limits<Real>::min()) {
-                    return;
-                }
-
-                const Real c2 = 1._rt / c2_denom;
-                const Real c1 = (ax*nx + ay*ny + az*nz) * c2 * c2;
-                const Real amplitude_x = c1 * (nx - betax) - c2 * ax;
-                const Real amplitude_y = c1 * (ny - betay) - c2 * ay;
-                const Real amplitude_z = c1 * (nz - betaz) - c2 * az;
-
-                amrex::ParticleReal xp, yp, zp;
-                getPosition(ip, xp, yp, zp);
-                const Real x_mid = 0.5_rt * (radiation_x_prev[ip] + xp);
-                const Real y_mid = 0.5_rt * (radiation_y_prev[ip] + yp);
-                const Real z_mid = 0.5_rt * (radiation_z_prev[ip] + zp);
-
-                const Real phase = radiation_omega[i_omega]
-                    * (radiation_time + 0.5_rt*dt
-                       - (x_mid*nx + y_mid*ny + z_mid*nz) * inv_c);
-                const Real sin_phase = std::sin(phase);
-                const Real cos_phase = std::cos(phase);
-                Real charge_weight_dt = w[ip] * q * dt;
-                if (radiation_particle_fraction < 1._rt) {
-                    charge_weight_dt /= radiation_particle_fraction;
-                }
-
-                amrex::HostDevice::Atomic::Add(
-                    &radiation_amp_x_re[gti], charge_weight_dt * amplitude_x * cos_phase);
-                amrex::HostDevice::Atomic::Add(
-                    &radiation_amp_x_im[gti], charge_weight_dt * amplitude_x * sin_phase);
-                amrex::HostDevice::Atomic::Add(
-                    &radiation_amp_y_re[gti], charge_weight_dt * amplitude_y * cos_phase);
-                amrex::HostDevice::Atomic::Add(
-                    &radiation_amp_y_im[gti], charge_weight_dt * amplitude_y * sin_phase);
-                amrex::HostDevice::Atomic::Add(
-                    &radiation_amp_z_re[gti], charge_weight_dt * amplitude_z * cos_phase);
-                amrex::HostDevice::Atomic::Add(
-                    &radiation_amp_z_im[gti], charge_weight_dt * amplitude_z * sin_phase);
-            });
+            amrex::Gpu::HostVector<FourierRadiationParticleRecord> host_records(
+                num_radiating_particles);
+            amrex::Gpu::copy(
+                amrex::Gpu::deviceToHost,
+                radiation_records.begin(),
+                radiation_records.end(),
+                host_records.begin());
+            fourier_radiation->AddLocalParticleRecords(
+                host_records.data(), num_radiating_particles);
         }
     }
 }

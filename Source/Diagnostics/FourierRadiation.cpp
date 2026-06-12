@@ -10,6 +10,9 @@
 #include <AMReX_Math.H>
 #include <AMReX_ParallelDescriptor.H>
 #include <AMReX_ParmParse.H>
+#ifdef AMREX_USE_MPI
+#   include <mpi.h>
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -209,6 +212,211 @@ FourierRadiation::GetIntensity (std::vector<Real>& intensity) const
                                   + ayr[i]*ayr[i] + ayi[i]*ayi[i]
                                   + azr[i]*azr[i] + azi[i]*azi[i]);
     }
+}
+
+void
+FourierRadiation::AddLocalParticleRecords (
+    FourierRadiationParticleRecord const* records,
+    long const num_records)
+{
+    if (!m_enabled || num_records <= 0) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> guard(m_local_particle_records_mutex);
+    m_local_particle_records.insert(
+        m_local_particle_records.end(), records, records + num_records);
+}
+
+void
+FourierRadiation::ClearLocalParticleRecords ()
+{
+    std::lock_guard<std::mutex> guard(m_local_particle_records_mutex);
+    m_local_particle_records.clear();
+}
+
+void
+FourierRadiation::ComputeGlobalWorkQueue (
+    Real const dt,
+    Real const charge,
+    Real const radiation_time)
+{
+    if (!m_enabled) {
+        return;
+    }
+
+    Vector<FourierRadiationParticleRecord> local_records;
+    {
+        std::lock_guard<std::mutex> guard(m_local_particle_records_mutex);
+        local_records.assign(m_local_particle_records.begin(), m_local_particle_records.end());
+        m_local_particle_records.clear();
+    }
+
+    Vector<FourierRadiationParticleRecord> global_records;
+
+#ifdef AMREX_USE_MPI
+    const int nprocs = ParallelDescriptor::NProcs();
+    const int myproc = ParallelDescriptor::MyProc();
+    const auto local_count = static_cast<Long>(local_records.size());
+    Vector<Long> counts(nprocs, 0);
+    MPI_Allgather(
+        &local_count, 1, ParallelDescriptor::Mpi_typemap<Long>::type(),
+        counts.data(), 1, ParallelDescriptor::Mpi_typemap<Long>::type(),
+        ParallelDescriptor::Communicator());
+
+    Long global_count = 0;
+    for (Long const count : counts) {
+        global_count += count;
+    }
+    if (global_count == 0) {
+        return;
+    }
+
+    WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
+        global_count <= static_cast<Long>(std::numeric_limits<int>::max() /
+                                          sizeof(FourierRadiationParticleRecord)),
+        "FourierRadiation global work queue is too large for MPI_Allgatherv byte counts.");
+
+    Vector<int> recv_counts(nprocs, 0);
+    Vector<int> displs(nprocs, 0);
+    Long offset = 0;
+    for (int i = 0; i < nprocs; ++i) {
+        WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
+            counts[i] <= static_cast<Long>(std::numeric_limits<int>::max() /
+                                           sizeof(FourierRadiationParticleRecord)),
+            "FourierRadiation per-rank work queue is too large for MPI_Allgatherv.");
+        recv_counts[i] = static_cast<int>(counts[i] * sizeof(FourierRadiationParticleRecord));
+        displs[i] = static_cast<int>(offset * sizeof(FourierRadiationParticleRecord));
+        offset += counts[i];
+    }
+
+    global_records.resize(static_cast<std::size_t>(global_count));
+    MPI_Allgatherv(
+        local_records.data(),
+        static_cast<int>(local_count * sizeof(FourierRadiationParticleRecord)),
+        MPI_BYTE,
+        global_records.data(),
+        recv_counts.data(),
+        displs.data(),
+        MPI_BYTE,
+        ParallelDescriptor::Communicator());
+#else
+    const int nprocs = 1;
+    const int myproc = 0;
+    const auto global_count = static_cast<Long>(local_records.size());
+    if (global_count == 0) {
+        return;
+    }
+    global_records = std::move(local_records);
+#endif
+
+    Gpu::DeviceVector<FourierRadiationParticleRecord> device_records(global_records.size());
+    Gpu::copy(
+        Gpu::hostToDevice,
+        global_records.begin(),
+        global_records.end(),
+        device_records.begin());
+
+    FourierRadiationParticleRecord const* const records_ptr = device_records.dataPtr();
+    Real const* const AMREX_RESTRICT radiation_omega = m_omega_2pi.dataPtr();
+    Real const* const AMREX_RESTRICT radiation_sin_theta = m_sin_theta.dataPtr();
+    Real const* const AMREX_RESTRICT radiation_cos_theta = m_cos_theta.dataPtr();
+    Real const* const AMREX_RESTRICT radiation_sin_phi = m_sin_phi.dataPtr();
+    Real const* const AMREX_RESTRICT radiation_cos_phi = m_cos_phi.dataPtr();
+    Real* const AMREX_RESTRICT radiation_amp_x_re = m_amp_x_re.dataPtr();
+    Real* const AMREX_RESTRICT radiation_amp_x_im = m_amp_x_im.dataPtr();
+    Real* const AMREX_RESTRICT radiation_amp_y_re = m_amp_y_re.dataPtr();
+    Real* const AMREX_RESTRICT radiation_amp_y_im = m_amp_y_im.dataPtr();
+    Real* const AMREX_RESTRICT radiation_amp_z_re = m_amp_z_re.dataPtr();
+    Real* const AMREX_RESTRICT radiation_amp_z_im = m_amp_z_im.dataPtr();
+    int const radiation_n_omega = m_num_omega;
+    int const radiation_n_theta = m_num_theta;
+    int const radiation_n_total = m_num_grid_nodes;
+    Real const radiation_particle_fraction = m_particle_fraction;
+
+    Long const global_work_size = global_count * static_cast<Long>(radiation_n_total);
+    Long const work_begin = global_work_size * myproc / nprocs;
+    Long const work_end = global_work_size * (myproc + 1) / nprocs;
+    Long const local_work_size = work_end - work_begin;
+    if (local_work_size == 0) {
+        return;
+    }
+
+    amrex::ParallelFor(local_work_size, [=] AMREX_GPU_DEVICE (Long local_iwork)
+    {
+        Long const iwork = work_begin + local_iwork;
+        Long const record_i = iwork / radiation_n_total;
+        int const gti = static_cast<int>(iwork - record_i * radiation_n_total);
+        FourierRadiationParticleRecord const record = records_ptr[record_i];
+
+        int const i_phi = gti / (radiation_n_omega * radiation_n_theta);
+        int const i_theta =
+            (gti - i_phi * radiation_n_omega * radiation_n_theta) / radiation_n_omega;
+        int const i_omega =
+            gti - i_phi * radiation_n_omega * radiation_n_theta
+                - i_theta * radiation_n_omega;
+
+        Real const nx = radiation_sin_theta[i_theta] * radiation_cos_phi[i_phi];
+        Real const ny = radiation_sin_theta[i_theta] * radiation_sin_phi[i_phi];
+        Real const nz = radiation_cos_theta[i_theta];
+
+        constexpr Real inv_c = 1._rt / PhysConst::c;
+        Real const dt_inv = 1._rt / dt;
+        Real const gamma_inv_prev = amrex::Math::rsqrt(
+            1._rt + (record.ux_old*record.ux_old + record.uy_old*record.uy_old
+                     + record.uz_old*record.uz_old) * inv_c * inv_c);
+        Real const gamma_inv_new = amrex::Math::rsqrt(
+            1._rt + (record.ux_new*record.ux_new + record.uy_new*record.uy_new
+                     + record.uz_new*record.uz_new) * inv_c * inv_c);
+
+        Real const betax_prev = record.ux_old * inv_c * gamma_inv_prev;
+        Real const betay_prev = record.uy_old * inv_c * gamma_inv_prev;
+        Real const betaz_prev = record.uz_old * inv_c * gamma_inv_prev;
+        Real const betax_new = record.ux_new * inv_c * gamma_inv_new;
+        Real const betay_new = record.uy_new * inv_c * gamma_inv_new;
+        Real const betaz_new = record.uz_new * inv_c * gamma_inv_new;
+
+        Real const betax = 0.5_rt * (betax_prev + betax_new);
+        Real const betay = 0.5_rt * (betay_prev + betay_new);
+        Real const betaz = 0.5_rt * (betaz_prev + betaz_new);
+        Real const ax = (betax_new - betax_prev) * dt_inv;
+        Real const ay = (betay_new - betay_prev) * dt_inv;
+        Real const az = (betaz_new - betaz_prev) * dt_inv;
+
+        Real const c2_denom = 1._rt - (betax*nx + betay*ny + betaz*nz);
+        if (amrex::Math::abs(c2_denom) <= std::numeric_limits<Real>::min()) {
+            return;
+        }
+
+        Real const c2 = 1._rt / c2_denom;
+        Real const c1 = (ax*nx + ay*ny + az*nz) * c2 * c2;
+        Real const amplitude_x = c1 * (nx - betax) - c2 * ax;
+        Real const amplitude_y = c1 * (ny - betay) - c2 * ay;
+        Real const amplitude_z = c1 * (nz - betaz) - c2 * az;
+
+        Real const phase = radiation_omega[i_omega]
+            * (radiation_time + 0.5_rt*dt
+               - (record.x_mid*nx + record.y_mid*ny + record.z_mid*nz) * inv_c);
+        Real const sin_phase = std::sin(phase);
+        Real const cos_phase = std::cos(phase);
+        Real charge_weight_dt = record.weight * charge * dt;
+        if (radiation_particle_fraction < 1._rt) {
+            charge_weight_dt /= radiation_particle_fraction;
+        }
+
+        amrex::HostDevice::Atomic::Add(
+            &radiation_amp_x_re[gti], charge_weight_dt * amplitude_x * cos_phase);
+        amrex::HostDevice::Atomic::Add(
+            &radiation_amp_x_im[gti], charge_weight_dt * amplitude_x * sin_phase);
+        amrex::HostDevice::Atomic::Add(
+            &radiation_amp_y_re[gti], charge_weight_dt * amplitude_y * cos_phase);
+        amrex::HostDevice::Atomic::Add(
+            &radiation_amp_y_im[gti], charge_weight_dt * amplitude_y * sin_phase);
+        amrex::HostDevice::Atomic::Add(
+            &radiation_amp_z_re[gti], charge_weight_dt * amplitude_z * cos_phase);
+        amrex::HostDevice::Atomic::Add(
+            &radiation_amp_z_im[gti], charge_weight_dt * amplitude_z * sin_phase);
+    });
 }
 
 void
