@@ -1477,9 +1477,9 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
                                : amrex::ParserExecutor<8>{};
     const Real radiation_particle_fraction =
         (do_fourier_radiation) ? fourier_radiation->ParticleFraction() : 1._rt;
-    amrex::Gpu::DeviceVector<Real> radiation_x_prev_vec;
-    amrex::Gpu::DeviceVector<Real> radiation_y_prev_vec;
-    amrex::Gpu::DeviceVector<Real> radiation_z_prev_vec;
+    amrex::Gpu::AsyncVector<Real> radiation_x_prev_vec;
+    amrex::Gpu::AsyncVector<Real> radiation_y_prev_vec;
+    amrex::Gpu::AsyncVector<Real> radiation_z_prev_vec;
     Real* AMREX_RESTRICT radiation_x_prev = nullptr;
     Real* AMREX_RESTRICT radiation_y_prev = nullptr;
     Real* AMREX_RESTRICT radiation_z_prev = nullptr;
@@ -1632,10 +1632,12 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
     });
 
     if (do_fourier_radiation) {
-        amrex::Gpu::DeviceVector<long> radiation_mask(np_to_push);
-        amrex::Gpu::DeviceVector<long> radiation_offsets(np_to_push);
-        long* const AMREX_RESTRICT radiation_mask_ptr = radiation_mask.dataPtr();
-        long* const AMREX_RESTRICT radiation_offsets_ptr = radiation_offsets.dataPtr();
+        constexpr long particles_per_radiation_chunk = 128;
+        constexpr std::size_t radiation_partial_workspace_bytes = 64u * 1024u * 1024u;
+
+        auto const radiation_data = fourier_radiation->GetDeviceData();
+        amrex::Gpu::AsyncVector<int> radiation_mask(np_to_push);
+        int* const AMREX_RESTRICT radiation_mask_ptr = radiation_mask.dataPtr();
 
         amrex::ParallelFor(np_to_push, [=] AMREX_GPU_DEVICE (long ip)
         {
@@ -1672,23 +1674,48 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
             radiation_mask_ptr[ip] = add_fourier_radiation ? 1 : 0;
         });
 
-        const long num_radiating_particles =
-            amrex::Scan::ExclusiveSum(np_to_push, radiation_mask_ptr, radiation_offsets_ptr);
+        const long num_chunks =
+            (np_to_push + particles_per_radiation_chunk - 1) / particles_per_radiation_chunk;
+        const auto bytes_per_chunk = static_cast<std::size_t>(
+            warpx::diagnostics::fourier_radiation::n_amp_components)
+            * static_cast<std::size_t>(radiation_data.num_grid_nodes) * sizeof(Real);
+        const long chunks_per_batch = std::max(
+            1L,
+            static_cast<long>(radiation_partial_workspace_bytes / std::max<std::size_t>(
+                bytes_per_chunk, 1u)));
 
-        if (num_radiating_particles > 0) {
-            amrex::Gpu::DeviceVector<FourierRadiationParticleRecord> radiation_records(
-                num_radiating_particles);
-            FourierRadiationParticleRecord* const AMREX_RESTRICT radiation_records_ptr =
-                radiation_records.dataPtr();
+        for (long chunk_begin = 0; chunk_begin < num_chunks; chunk_begin += chunks_per_batch) {
+            const long batch_chunks = std::min(chunks_per_batch, num_chunks - chunk_begin);
+            const Long partial_size = static_cast<Long>(
+                warpx::diagnostics::fourier_radiation::n_amp_components)
+                * static_cast<Long>(radiation_data.num_grid_nodes) * batch_chunks;
+            amrex::Gpu::AsyncVector<Real> partial_amp(partial_size);
+            Real* const AMREX_RESTRICT partial_amp_ptr = partial_amp.dataPtr();
 
-            amrex::ParallelFor(np_to_push, [=] AMREX_GPU_DEVICE (long ip)
+            const Long partial_work_size =
+                static_cast<Long>(batch_chunks) * radiation_data.num_grid_nodes;
+            amrex::ParallelFor(partial_work_size, [=] AMREX_GPU_DEVICE (Long local_iwork)
             {
-                if (radiation_mask_ptr[ip] != 0) {
+                const long local_chunk = static_cast<long>(
+                    local_iwork / radiation_data.num_grid_nodes);
+                const int gti = static_cast<int>(
+                    local_iwork - local_chunk * radiation_data.num_grid_nodes);
+                const long chunk = chunk_begin + local_chunk;
+                const long particle_begin = chunk * particles_per_radiation_chunk;
+                const long particle_end =
+                    (particle_begin + particles_per_radiation_chunk < np_to_push)
+                    ? particle_begin + particles_per_radiation_chunk : np_to_push;
+
+                FourierRadiationAmplitude sum;
+                for (long ip = particle_begin; ip < particle_end; ++ip) {
+                    if (radiation_mask_ptr[ip] == 0) {
+                        continue;
+                    }
+
                     amrex::ParticleReal xp, yp, zp;
                     getPosition(ip, xp, yp, zp);
 
-                    const long record_i = radiation_offsets_ptr[ip];
-                    radiation_records_ptr[record_i] = FourierRadiationParticleRecord{
+                    FourierRadiationParticleRecord const record{
                         0.5_rt * (radiation_x_prev[ip] + xp),
                         0.5_rt * (radiation_y_prev[ip] + yp),
                         0.5_rt * (radiation_z_prev[ip] + zp),
@@ -1699,15 +1726,68 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
                         uy[ip],
                         uz[ip],
                         w[ip]};
+                    FourierRadiationAmplitude const contribution =
+                        warpx::diagnostics::fourier_radiation::contribution(
+                            radiation_data, record, gti, dt, q, radiation_time);
+                    sum.x_re += contribution.x_re;
+                    sum.x_im += contribution.x_im;
+                    sum.y_re += contribution.y_re;
+                    sum.y_im += contribution.y_im;
+                    sum.z_re += contribution.z_re;
+                    sum.z_im += contribution.z_im;
                 }
+
+                const Long offset_base =
+                    (static_cast<Long>(local_chunk)
+                     * warpx::diagnostics::fourier_radiation::n_amp_components
+                     * radiation_data.num_grid_nodes) + gti;
+                partial_amp_ptr[
+                    offset_base
+                    + warpx::diagnostics::fourier_radiation::amp_x_re
+                    * radiation_data.num_grid_nodes] = sum.x_re;
+                partial_amp_ptr[
+                    offset_base
+                    + warpx::diagnostics::fourier_radiation::amp_x_im
+                    * radiation_data.num_grid_nodes] = sum.x_im;
+                partial_amp_ptr[
+                    offset_base
+                    + warpx::diagnostics::fourier_radiation::amp_y_re
+                    * radiation_data.num_grid_nodes] = sum.y_re;
+                partial_amp_ptr[
+                    offset_base
+                    + warpx::diagnostics::fourier_radiation::amp_y_im
+                    * radiation_data.num_grid_nodes] = sum.y_im;
+                partial_amp_ptr[
+                    offset_base
+                    + warpx::diagnostics::fourier_radiation::amp_z_re
+                    * radiation_data.num_grid_nodes] = sum.z_re;
+                partial_amp_ptr[
+                    offset_base
+                    + warpx::diagnostics::fourier_radiation::amp_z_im
+                    * radiation_data.num_grid_nodes] = sum.z_im;
             });
 
-            fourier_radiation->AccumulateLocalParticleRecords(
-                radiation_records.dataPtr(),
-                num_radiating_particles,
-                dt,
-                this->m_charge,
-                radiation_time);
+            const Long reduce_work_size =
+                static_cast<Long>(warpx::diagnostics::fourier_radiation::n_amp_components)
+                * radiation_data.num_grid_nodes;
+            amrex::ParallelFor(reduce_work_size, [=] AMREX_GPU_DEVICE (Long iwork)
+            {
+                const int component = static_cast<int>(iwork / radiation_data.num_grid_nodes);
+                const int gti = static_cast<int>(
+                    iwork - static_cast<Long>(component) * radiation_data.num_grid_nodes);
+
+                Real sum = 0._rt;
+                for (long local_chunk = 0; local_chunk < batch_chunks; ++local_chunk) {
+                    const Long partial_i =
+                        static_cast<Long>(local_chunk)
+                        * warpx::diagnostics::fourier_radiation::n_amp_components
+                        * radiation_data.num_grid_nodes
+                        + static_cast<Long>(component) * radiation_data.num_grid_nodes
+                        + gti;
+                    sum += partial_amp_ptr[partial_i];
+                }
+                radiation_data.amp[iwork] += sum;
+            });
         }
     }
 }

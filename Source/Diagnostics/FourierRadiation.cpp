@@ -6,6 +6,7 @@
 
 #include <AMReX.H>
 #include <AMReX_Gpu.H>
+#include <AMReX_GpuDevice.H>
 #include <AMReX_GpuLaunch.H>
 #include <AMReX_Math.H>
 #include <AMReX_ParallelDescriptor.H>
@@ -13,9 +14,9 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
 
 using namespace amrex;
+namespace fr = warpx::diagnostics::fourier_radiation;
 
 FourierRadiation::FourierRadiation ()
 {
@@ -124,11 +125,12 @@ FourierRadiation::Allocate ()
 {
     m_num_grid_nodes = m_num_omega * m_num_theta * m_num_phi;
 
-    Vector<Real> h_omega(m_num_omega);
-    Vector<Real> h_sin_theta(m_num_theta);
-    Vector<Real> h_cos_theta(m_num_theta);
-    Vector<Real> h_sin_phi(m_num_phi);
-    Vector<Real> h_cos_phi(m_num_phi);
+    Vector<Real> h_grid_data(m_num_omega + 2*m_num_theta + 2*m_num_phi);
+    Real* const h_omega = h_grid_data.data();
+    Real* const h_sin_theta = h_omega + m_num_omega;
+    Real* const h_cos_theta = h_sin_theta + m_num_theta;
+    Real* const h_sin_phi = h_cos_theta + m_num_theta;
+    Real* const h_cos_phi = h_sin_phi + m_num_phi;
     m_frequency.resize(m_num_omega);
 
     for (int i = 0; i < m_num_omega; ++i) {
@@ -153,23 +155,35 @@ FourierRadiation::Allocate ()
         h_cos_phi[i] = std::cos(phi);
     }
 
-    m_omega_2pi.resize(m_num_omega);
-    m_sin_theta.resize(m_num_theta);
-    m_cos_theta.resize(m_num_theta);
-    m_sin_phi.resize(m_num_phi);
-    m_cos_phi.resize(m_num_phi);
-    Gpu::copy(Gpu::hostToDevice, h_omega.begin(), h_omega.end(), m_omega_2pi.begin());
-    Gpu::copy(Gpu::hostToDevice, h_sin_theta.begin(), h_sin_theta.end(), m_sin_theta.begin());
-    Gpu::copy(Gpu::hostToDevice, h_cos_theta.begin(), h_cos_theta.end(), m_cos_theta.begin());
-    Gpu::copy(Gpu::hostToDevice, h_sin_phi.begin(), h_sin_phi.end(), m_sin_phi.begin());
-    Gpu::copy(Gpu::hostToDevice, h_cos_phi.begin(), h_cos_phi.end(), m_cos_phi.begin());
+    m_grid_data.resize(h_grid_data.size());
+    Gpu::copy(Gpu::hostToDevice, h_grid_data.begin(), h_grid_data.end(), m_grid_data.begin());
 
-    m_amp_x_re.resize(m_num_grid_nodes, 0._rt);
-    m_amp_x_im.resize(m_num_grid_nodes, 0._rt);
-    m_amp_y_re.resize(m_num_grid_nodes, 0._rt);
-    m_amp_y_im.resize(m_num_grid_nodes, 0._rt);
-    m_amp_z_re.resize(m_num_grid_nodes, 0._rt);
-    m_amp_z_im.resize(m_num_grid_nodes, 0._rt);
+    m_num_amp_streams = Gpu::numGpuStreams();
+    m_amp.resize(
+        static_cast<Long>(m_num_amp_streams) * fr::n_amp_components * m_num_grid_nodes, 0._rt);
+}
+
+FourierRadiationDeviceData
+FourierRadiation::GetDeviceData ()
+{
+    Long stream_offset = 0;
+#ifdef AMREX_USE_GPU
+    stream_offset = static_cast<Long>(Gpu::Device::streamIndex())
+        * fr::n_amp_components * m_num_grid_nodes;
+#endif
+
+    return FourierRadiationDeviceData{
+        OmegaData(),
+        SinThetaData(),
+        CosThetaData(),
+        SinPhiData(),
+        CosPhiData(),
+        m_amp.dataPtr() + stream_offset,
+        m_num_omega,
+        m_num_theta,
+        m_num_phi,
+        m_num_grid_nodes,
+        m_particle_fraction};
 }
 
 void
@@ -180,141 +194,35 @@ FourierRadiation::GetIntensity (std::vector<Real>& intensity) const
         return;
     }
 
-    Vector<Real> axr(m_num_grid_nodes);
-    Vector<Real> axi(m_num_grid_nodes);
-    Vector<Real> ayr(m_num_grid_nodes);
-    Vector<Real> ayi(m_num_grid_nodes);
-    Vector<Real> azr(m_num_grid_nodes);
-    Vector<Real> azi(m_num_grid_nodes);
-
-    Gpu::copy(Gpu::deviceToHost, m_amp_x_re.begin(), m_amp_x_re.end(), axr.begin());
-    Gpu::copy(Gpu::deviceToHost, m_amp_x_im.begin(), m_amp_x_im.end(), axi.begin());
-    Gpu::copy(Gpu::deviceToHost, m_amp_y_re.begin(), m_amp_y_re.end(), ayr.begin());
-    Gpu::copy(Gpu::deviceToHost, m_amp_y_im.begin(), m_amp_y_im.end(), ayi.begin());
-    Gpu::copy(Gpu::deviceToHost, m_amp_z_re.begin(), m_amp_z_re.end(), azr.begin());
-    Gpu::copy(Gpu::deviceToHost, m_amp_z_im.begin(), m_amp_z_im.end(), azi.begin());
-
-    ParallelDescriptor::ReduceRealSum(axr.data(), static_cast<int>(axr.size()));
-    ParallelDescriptor::ReduceRealSum(axi.data(), static_cast<int>(axi.size()));
-    ParallelDescriptor::ReduceRealSum(ayr.data(), static_cast<int>(ayr.size()));
-    ParallelDescriptor::ReduceRealSum(ayi.data(), static_cast<int>(ayi.size()));
-    ParallelDescriptor::ReduceRealSum(azr.data(), static_cast<int>(azr.size()));
-    ParallelDescriptor::ReduceRealSum(azi.data(), static_cast<int>(azi.size()));
+    Vector<Real> amp(
+        static_cast<Long>(m_num_amp_streams) * fr::n_amp_components * m_num_grid_nodes);
+    Gpu::copy(Gpu::deviceToHost, m_amp.begin(), m_amp.end(), amp.begin());
+    ParallelDescriptor::ReduceRealSum(amp.data(), static_cast<int>(amp.size()));
 
     for (int i = 0; i < m_num_grid_nodes; ++i) {
         constexpr Real prefactor =
             1._rt / (16._rt * Math::pi<Real>() * Math::pi<Real>() * Math::pi<Real>()
                      * PhysConst::epsilon_0 * PhysConst::c);
-        intensity[i] = prefactor * (axr[i]*axr[i] + axi[i]*axi[i]
-                                  + ayr[i]*ayr[i] + ayi[i]*ayi[i]
-                                  + azr[i]*azr[i] + azi[i]*azi[i]);
+        Real axr = 0._rt;
+        Real axi = 0._rt;
+        Real ayr = 0._rt;
+        Real ayi = 0._rt;
+        Real azr = 0._rt;
+        Real azi = 0._rt;
+        for (int istream = 0; istream < m_num_amp_streams; ++istream) {
+            Real const* const stream_amp = amp.data()
+                + static_cast<Long>(istream) * fr::n_amp_components * m_num_grid_nodes;
+            axr += stream_amp[fr::amp_x_re * m_num_grid_nodes + i];
+            axi += stream_amp[fr::amp_x_im * m_num_grid_nodes + i];
+            ayr += stream_amp[fr::amp_y_re * m_num_grid_nodes + i];
+            ayi += stream_amp[fr::amp_y_im * m_num_grid_nodes + i];
+            azr += stream_amp[fr::amp_z_re * m_num_grid_nodes + i];
+            azi += stream_amp[fr::amp_z_im * m_num_grid_nodes + i];
+        }
+        intensity[i] = prefactor * (axr*axr + axi*axi
+                                  + ayr*ayr + ayi*ayi
+                                  + azr*azr + azi*azi);
     }
-}
-
-void
-FourierRadiation::AccumulateLocalParticleRecords (
-    FourierRadiationParticleRecord const* records,
-    Long const num_records,
-    Real const dt,
-    Real const charge,
-    Real const radiation_time)
-{
-    if (!m_enabled || num_records <= 0) { return; }
-
-    FourierRadiationParticleRecord const* const records_ptr = records;
-    Real const* const AMREX_RESTRICT radiation_omega = m_omega_2pi.dataPtr();
-    Real const* const AMREX_RESTRICT radiation_sin_theta = m_sin_theta.dataPtr();
-    Real const* const AMREX_RESTRICT radiation_cos_theta = m_cos_theta.dataPtr();
-    Real const* const AMREX_RESTRICT radiation_sin_phi = m_sin_phi.dataPtr();
-    Real const* const AMREX_RESTRICT radiation_cos_phi = m_cos_phi.dataPtr();
-    Real* const AMREX_RESTRICT radiation_amp_x_re = m_amp_x_re.dataPtr();
-    Real* const AMREX_RESTRICT radiation_amp_x_im = m_amp_x_im.dataPtr();
-    Real* const AMREX_RESTRICT radiation_amp_y_re = m_amp_y_re.dataPtr();
-    Real* const AMREX_RESTRICT radiation_amp_y_im = m_amp_y_im.dataPtr();
-    Real* const AMREX_RESTRICT radiation_amp_z_re = m_amp_z_re.dataPtr();
-    Real* const AMREX_RESTRICT radiation_amp_z_im = m_amp_z_im.dataPtr();
-    int const radiation_n_omega = m_num_omega;
-    int const radiation_n_theta = m_num_theta;
-    int const radiation_n_total = m_num_grid_nodes;
-    Real const radiation_particle_fraction = m_particle_fraction;
-
-    Long const local_work_size = num_records * static_cast<Long>(radiation_n_total);
-
-    amrex::ParallelFor(local_work_size, [=] AMREX_GPU_DEVICE (Long local_iwork)
-    {
-        Long const record_i = local_iwork / radiation_n_total;
-        int const gti = static_cast<int>(local_iwork - record_i * radiation_n_total);
-        FourierRadiationParticleRecord const record = records_ptr[record_i];
-
-        int const i_phi = gti / (radiation_n_omega * radiation_n_theta);
-        int const i_theta =
-            (gti - i_phi * radiation_n_omega * radiation_n_theta) / radiation_n_omega;
-        int const i_omega =
-            gti - i_phi * radiation_n_omega * radiation_n_theta
-                - i_theta * radiation_n_omega;
-
-        Real const nx = radiation_sin_theta[i_theta] * radiation_cos_phi[i_phi];
-        Real const ny = radiation_sin_theta[i_theta] * radiation_sin_phi[i_phi];
-        Real const nz = radiation_cos_theta[i_theta];
-
-        constexpr Real inv_c = 1._rt / PhysConst::c;
-        Real const dt_inv = 1._rt / dt;
-        Real const gamma_inv_prev = amrex::Math::rsqrt(
-            1._rt + (record.ux_old*record.ux_old + record.uy_old*record.uy_old
-                     + record.uz_old*record.uz_old) * inv_c * inv_c);
-        Real const gamma_inv_new = amrex::Math::rsqrt(
-            1._rt + (record.ux_new*record.ux_new + record.uy_new*record.uy_new
-                     + record.uz_new*record.uz_new) * inv_c * inv_c);
-
-        Real const betax_prev = record.ux_old * inv_c * gamma_inv_prev;
-        Real const betay_prev = record.uy_old * inv_c * gamma_inv_prev;
-        Real const betaz_prev = record.uz_old * inv_c * gamma_inv_prev;
-        Real const betax_new = record.ux_new * inv_c * gamma_inv_new;
-        Real const betay_new = record.uy_new * inv_c * gamma_inv_new;
-        Real const betaz_new = record.uz_new * inv_c * gamma_inv_new;
-
-        Real const betax = 0.5_rt * (betax_prev + betax_new);
-        Real const betay = 0.5_rt * (betay_prev + betay_new);
-        Real const betaz = 0.5_rt * (betaz_prev + betaz_new);
-        Real const ax = (betax_new - betax_prev) * dt_inv;
-        Real const ay = (betay_new - betay_prev) * dt_inv;
-        Real const az = (betaz_new - betaz_prev) * dt_inv;
-
-        Real const c2_denom = 1._rt - (betax*nx + betay*ny + betaz*nz);
-        if (amrex::Math::abs(c2_denom) <= std::numeric_limits<Real>::min()) {
-            return;
-        }
-
-        Real const c2 = 1._rt / c2_denom;
-        Real const c1 = (ax*nx + ay*ny + az*nz) * c2 * c2;
-        Real const amplitude_x = c1 * (nx - betax) - c2 * ax;
-        Real const amplitude_y = c1 * (ny - betay) - c2 * ay;
-        Real const amplitude_z = c1 * (nz - betaz) - c2 * az;
-
-        Real const phase = radiation_omega[i_omega]
-            * (radiation_time + 0.5_rt*dt
-               - (record.x_mid*nx + record.y_mid*ny + record.z_mid*nz) * inv_c);
-        Real const sin_phase = std::sin(phase);
-        Real const cos_phase = std::cos(phase);
-        Real charge_weight_dt = record.weight * charge * dt;
-        if (radiation_particle_fraction < 1._rt) {
-            charge_weight_dt /= radiation_particle_fraction;
-        }
-
-        amrex::HostDevice::Atomic::Add(
-            &radiation_amp_x_re[gti], charge_weight_dt * amplitude_x * cos_phase);
-        amrex::HostDevice::Atomic::Add(
-            &radiation_amp_x_im[gti], charge_weight_dt * amplitude_x * sin_phase);
-        amrex::HostDevice::Atomic::Add(
-            &radiation_amp_y_re[gti], charge_weight_dt * amplitude_y * cos_phase);
-        amrex::HostDevice::Atomic::Add(
-            &radiation_amp_y_im[gti], charge_weight_dt * amplitude_y * sin_phase);
-        amrex::HostDevice::Atomic::Add(
-            &radiation_amp_z_re[gti], charge_weight_dt * amplitude_z * cos_phase);
-        amrex::HostDevice::Atomic::Add(
-            &radiation_amp_z_im[gti], charge_weight_dt * amplitude_z * sin_phase);
-    });
-    amrex::Gpu::streamSynchronize();
 }
 
 void
@@ -324,21 +232,11 @@ FourierRadiation::Reset ()
         return;
     }
 
-    Real* const amp_x_re = m_amp_x_re.dataPtr();
-    Real* const amp_x_im = m_amp_x_im.dataPtr();
-    Real* const amp_y_re = m_amp_y_re.dataPtr();
-    Real* const amp_y_im = m_amp_y_im.dataPtr();
-    Real* const amp_z_re = m_amp_z_re.dataPtr();
-    Real* const amp_z_im = m_amp_z_im.dataPtr();
-    int const n = m_num_grid_nodes;
+    Real* const amp = m_amp.dataPtr();
+    int const n = static_cast<int>(m_amp.size());
 
     ParallelFor(n, [=] AMREX_GPU_DEVICE (int i)
     {
-        amp_x_re[i] = 0._rt;
-        amp_x_im[i] = 0._rt;
-        amp_y_re[i] = 0._rt;
-        amp_y_im[i] = 0._rt;
-        amp_z_re[i] = 0._rt;
-        amp_z_im[i] = 0._rt;
+        amp[i] = 0._rt;
     });
 }

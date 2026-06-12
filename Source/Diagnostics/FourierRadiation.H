@@ -1,6 +1,8 @@
 #ifndef WARPX_DIAGNOSTICS_FOURIERRADIATION_H_
 #define WARPX_DIAGNOSTICS_FOURIERRADIATION_H_
 
+#include "Diagnostics/FourierRadiation_K.H"
+
 #include <AMReX_GpuContainers.H>
 #include <AMReX_Parser.H>
 #include <AMReX_REAL.H>
@@ -8,20 +10,6 @@
 #include <memory>
 #include <string>
 #include <vector>
-
-struct FourierRadiationParticleRecord
-{
-    amrex::Real x_mid = 0.0;
-    amrex::Real y_mid = 0.0;
-    amrex::Real z_mid = 0.0;
-    amrex::Real ux_old = 0.0;
-    amrex::Real uy_old = 0.0;
-    amrex::Real uz_old = 0.0;
-    amrex::Real ux_new = 0.0;
-    amrex::Real uy_new = 0.0;
-    amrex::Real uz_new = 0.0;
-    amrex::Real weight = 0.0;
-};
 
 class FourierRadiation
 {
@@ -32,27 +20,58 @@ public:
     [[nodiscard]] bool IsSpeciesSelected (std::string const& species_name) const;
     [[nodiscard]] int NumGridNodes () const { return m_num_grid_nodes; }
 
-    [[nodiscard]] amrex::Real const* OmegaData () const { return m_omega_2pi.dataPtr(); }
-    [[nodiscard]] amrex::Real const* SinThetaData () const { return m_sin_theta.dataPtr(); }
-    [[nodiscard]] amrex::Real const* CosThetaData () const { return m_cos_theta.dataPtr(); }
-    [[nodiscard]] amrex::Real const* SinPhiData () const { return m_sin_phi.dataPtr(); }
-    [[nodiscard]] amrex::Real const* CosPhiData () const { return m_cos_phi.dataPtr(); }
+    [[nodiscard]] amrex::Real const* OmegaData () const { return m_grid_data.dataPtr(); }
+    [[nodiscard]] amrex::Real const* SinThetaData () const
+    {
+        return m_grid_data.dataPtr() + m_num_omega;
+    }
+    [[nodiscard]] amrex::Real const* CosThetaData () const
+    {
+        return m_grid_data.dataPtr() + m_num_omega + m_num_theta;
+    }
+    [[nodiscard]] amrex::Real const* SinPhiData () const
+    {
+        return m_grid_data.dataPtr() + m_num_omega + 2*m_num_theta;
+    }
+    [[nodiscard]] amrex::Real const* CosPhiData () const
+    {
+        return m_grid_data.dataPtr() + m_num_omega + 2*m_num_theta + m_num_phi;
+    }
 
-    [[nodiscard]] amrex::Real* AmpXReData () { return m_amp_x_re.dataPtr(); }
-    [[nodiscard]] amrex::Real* AmpXImData () { return m_amp_x_im.dataPtr(); }
-    [[nodiscard]] amrex::Real* AmpYReData () { return m_amp_y_re.dataPtr(); }
-    [[nodiscard]] amrex::Real* AmpYImData () { return m_amp_y_im.dataPtr(); }
-    [[nodiscard]] amrex::Real* AmpZReData () { return m_amp_z_re.dataPtr(); }
-    [[nodiscard]] amrex::Real* AmpZImData () { return m_amp_z_im.dataPtr(); }
+    [[nodiscard]] amrex::Real* AmpXReData ()
+    {
+        return m_amp.dataPtr()
+            + warpx::diagnostics::fourier_radiation::amp_x_re * m_num_grid_nodes;
+    }
+    [[nodiscard]] amrex::Real* AmpXImData ()
+    {
+        return m_amp.dataPtr()
+            + warpx::diagnostics::fourier_radiation::amp_x_im * m_num_grid_nodes;
+    }
+    [[nodiscard]] amrex::Real* AmpYReData ()
+    {
+        return m_amp.dataPtr()
+            + warpx::diagnostics::fourier_radiation::amp_y_re * m_num_grid_nodes;
+    }
+    [[nodiscard]] amrex::Real* AmpYImData ()
+    {
+        return m_amp.dataPtr()
+            + warpx::diagnostics::fourier_radiation::amp_y_im * m_num_grid_nodes;
+    }
+    [[nodiscard]] amrex::Real* AmpZReData ()
+    {
+        return m_amp.dataPtr()
+            + warpx::diagnostics::fourier_radiation::amp_z_re * m_num_grid_nodes;
+    }
+    [[nodiscard]] amrex::Real* AmpZImData ()
+    {
+        return m_amp.dataPtr()
+            + warpx::diagnostics::fourier_radiation::amp_z_im * m_num_grid_nodes;
+    }
+    [[nodiscard]] FourierRadiationDeviceData GetDeviceData ();
 
     void GetIntensity (std::vector<amrex::Real>& intensity) const;
     void Reset ();
-    void AccumulateLocalParticleRecords (
-        FourierRadiationParticleRecord const* records,
-        amrex::Long num_records,
-        amrex::Real dt,
-        amrex::Real charge,
-        amrex::Real radiation_time);
 
     [[nodiscard]] int NumOmega () const { return m_num_omega; }
     [[nodiscard]] int NumTheta () const { return m_num_theta; }
@@ -84,6 +103,7 @@ private:
     int m_num_theta = 0;
     int m_num_phi = 0;
     int m_num_grid_nodes = 0;
+    int m_num_amp_streams = 1;
 
     amrex::Real m_omega_min = 0.0;
     amrex::Real m_omega_max = 0.0;
@@ -99,18 +119,8 @@ private:
     amrex::ParserExecutor<8> m_particle_filter_function;
 
     std::vector<amrex::Real> m_frequency;
-    amrex::Gpu::DeviceVector<amrex::Real> m_omega_2pi;
-    amrex::Gpu::DeviceVector<amrex::Real> m_sin_theta;
-    amrex::Gpu::DeviceVector<amrex::Real> m_cos_theta;
-    amrex::Gpu::DeviceVector<amrex::Real> m_sin_phi;
-    amrex::Gpu::DeviceVector<amrex::Real> m_cos_phi;
-
-    amrex::Gpu::DeviceVector<amrex::Real> m_amp_x_re;
-    amrex::Gpu::DeviceVector<amrex::Real> m_amp_x_im;
-    amrex::Gpu::DeviceVector<amrex::Real> m_amp_y_re;
-    amrex::Gpu::DeviceVector<amrex::Real> m_amp_y_im;
-    amrex::Gpu::DeviceVector<amrex::Real> m_amp_z_re;
-    amrex::Gpu::DeviceVector<amrex::Real> m_amp_z_im;
+    amrex::Gpu::DeviceVector<amrex::Real> m_grid_data;
+    amrex::Gpu::DeviceVector<amrex::Real> m_amp;
 };
 
 #endif
