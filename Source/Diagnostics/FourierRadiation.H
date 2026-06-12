@@ -6,7 +6,6 @@
 #include <AMReX_REAL.H>
 
 #include <memory>
-#include <mutex>
 #include <string>
 #include <vector>
 
@@ -48,11 +47,9 @@ public:
 
     void GetIntensity (std::vector<amrex::Real>& intensity) const;
     void Reset ();
-    void AddLocalParticleRecords (
+    void AccumulateLocalParticleRecords (
         FourierRadiationParticleRecord const* records,
-        long num_records);
-    void ClearLocalParticleRecords ();
-    void ComputeGlobalWorkQueue (
+        amrex::Long num_records,
         amrex::Real dt,
         amrex::Real charge,
         amrex::Real radiation_time);
@@ -114,9 +111,6 @@ private:
     amrex::Gpu::DeviceVector<amrex::Real> m_amp_y_im;
     amrex::Gpu::DeviceVector<amrex::Real> m_amp_z_re;
     amrex::Gpu::DeviceVector<amrex::Real> m_amp_z_im;
-
-    std::vector<FourierRadiationParticleRecord> m_local_particle_records;
-    std::mutex m_local_particle_records_mutex;
 };
 
 #endif
