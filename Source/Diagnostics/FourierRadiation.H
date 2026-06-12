@@ -6,8 +6,23 @@
 #include <AMReX_REAL.H>
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
+
+struct FourierRadiationParticleRecord
+{
+    amrex::Real x_mid = 0.0;
+    amrex::Real y_mid = 0.0;
+    amrex::Real z_mid = 0.0;
+    amrex::Real ux_old = 0.0;
+    amrex::Real uy_old = 0.0;
+    amrex::Real uz_old = 0.0;
+    amrex::Real ux_new = 0.0;
+    amrex::Real uy_new = 0.0;
+    amrex::Real uz_new = 0.0;
+    amrex::Real weight = 0.0;
+};
 
 class FourierRadiation
 {
@@ -33,6 +48,14 @@ public:
 
     void GetIntensity (std::vector<amrex::Real>& intensity) const;
     void Reset ();
+    void AddLocalParticleRecords (
+        FourierRadiationParticleRecord const* records,
+        long num_records);
+    void ClearLocalParticleRecords ();
+    void ComputeGlobalWorkQueue (
+        amrex::Real dt,
+        amrex::Real charge,
+        amrex::Real radiation_time);
 
     [[nodiscard]] int NumOmega () const { return m_num_omega; }
     [[nodiscard]] int NumTheta () const { return m_num_theta; }
@@ -91,6 +114,9 @@ private:
     amrex::Gpu::DeviceVector<amrex::Real> m_amp_y_im;
     amrex::Gpu::DeviceVector<amrex::Real> m_amp_z_re;
     amrex::Gpu::DeviceVector<amrex::Real> m_amp_z_im;
+
+    std::vector<FourierRadiationParticleRecord> m_local_particle_records;
+    std::mutex m_local_particle_records_mutex;
 };
 
 #endif
