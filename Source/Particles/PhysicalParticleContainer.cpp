@@ -327,18 +327,22 @@ PhysicalParticleContainer::PhysicalParticleContainer (AmrCore* amr_core, int isp
         m_do_fourier_radiation = true;
         m_fourier_radiation_filter_is_latched = fourier_radiation->ParticleFilterIsLatched();
     }
-    if (m_save_previous_position) {
+    const bool fourier_radiation_needs_previous_position =
+        m_do_fourier_radiation && !fourier_radiation->UseImmediateLocalAccumulation();
+    if (m_save_previous_position || fourier_radiation_needs_previous_position) {
 #if !defined(WARPX_DIM_1D_Z)
         AddRealComp("prev_x");
 #endif
-#if defined(WARPX_DIM_3D)
+#if defined(WARPX_DIM_3D) || defined(WARPX_DIM_RZ)
         AddRealComp("prev_y");
 #endif
 #if defined(WARPX_ZINDEX)
         AddRealComp("prev_z");
 #endif
 #if defined(WARPX_DIM_RZ) || defined(WARPX_DIM_RCYLINDER) || defined(WARPX_DIM_RSPHERE)
-      amrex::Abort("Saving previous particle positions not yet implemented in RZ");
+        if (m_save_previous_position) {
+            amrex::Abort("Saving previous particle positions not yet implemented in RZ");
+        }
 #endif
     }
     if (m_do_fourier_radiation) {
@@ -831,6 +835,13 @@ PhysicalParticleContainer::Evolve (ablastr::fields::MultiFabRegister& fields,
                 amrex::HostDevice::Atomic::Add( &(*cost)[pti.index()], wt);
             }
         }
+    }
+
+    if (m_do_fourier_radiation &&
+        (position_push_type == PositionPushType::Full) &&
+        (momentum_push_type == MomentumPushType::Full))
+    {
+        AccumulateFourierRadiationRecords(lev, dt, WarpX::GetInstance().gett_new(lev));
     }
 
     // Split particles at the end of the time step.
@@ -1337,6 +1348,164 @@ PhysicalParticleContainer::PushP (int lev, Real dt,
     }
 }
 
+void
+PhysicalParticleContainer::AccumulateFourierRadiationRecords (
+    int const lev,
+    Real const dt,
+    Real const radiation_time)
+{
+    auto* fourier_radiation = WarpX::GetInstance().GetFourierRadiation();
+    if (fourier_radiation->UseImmediateLocalAccumulation()) {
+        return;
+    }
+
+    const bool radiation_do_particle_filter = fourier_radiation->DoParticleFilter();
+    const bool radiation_particle_filter_is_latched = m_fourier_radiation_filter_is_latched;
+    const auto radiation_particle_filter = fourier_radiation->ParticleFilterFunction();
+    const Real radiation_particle_fraction = fourier_radiation->ParticleFraction();
+
+    Vector<FourierRadiationParticleRecord> local_records;
+
+    for (WarpXParIter pti(*this, lev); pti.isValid(); ++pti)
+    {
+        long const np = pti.numParticles();
+        if (np == 0) {
+            continue;
+        }
+
+        const auto getPosition = GetParticlePosition<PIdx>(pti, 0);
+        auto& attribs = pti.GetAttribs();
+        auto const& soa = pti.GetStructOfArrays();
+        uint64_t const* const AMREX_RESTRICT idcpu = soa.GetIdCPUData().data();
+        ParticleReal const* const AMREX_RESTRICT ux = attribs[PIdx::ux].dataPtr();
+        ParticleReal const* const AMREX_RESTRICT uy = attribs[PIdx::uy].dataPtr();
+        ParticleReal const* const AMREX_RESTRICT uz = attribs[PIdx::uz].dataPtr();
+        ParticleReal const* const AMREX_RESTRICT w = attribs[PIdx::w].dataPtr();
+
+        ParticleReal const* const AMREX_RESTRICT x_old =
+            pti.GetAttribs("prev_x").dataPtr();
+#if defined(WARPX_DIM_3D) || defined(WARPX_DIM_RZ)
+        ParticleReal const* const AMREX_RESTRICT y_old =
+            pti.GetAttribs("prev_y").dataPtr();
+#else
+        amrex::ignore_unused(pti);
+        ParticleReal const* const AMREX_RESTRICT y_old = nullptr;
+#endif
+        ParticleReal const* const AMREX_RESTRICT z_old =
+            pti.GetAttribs("prev_z").dataPtr();
+        ParticleReal const* const AMREX_RESTRICT ux_old =
+            pti.GetAttribs("prev_ux").dataPtr();
+        ParticleReal const* const AMREX_RESTRICT uy_old =
+            pti.GetAttribs("prev_uy").dataPtr();
+        ParticleReal const* const AMREX_RESTRICT uz_old =
+            pti.GetAttribs("prev_uz").dataPtr();
+        int* const AMREX_RESTRICT fourier_radiation_tracked =
+            radiation_particle_filter_is_latched
+            ? pti.GetiAttribs("fourier_radiation_tracked").dataPtr() : nullptr;
+
+        Gpu::AsyncVector<int> radiation_mask(np);
+        Gpu::AsyncVector<int> radiation_offsets(np);
+        int* const AMREX_RESTRICT radiation_mask_ptr = radiation_mask.dataPtr();
+        int* const AMREX_RESTRICT radiation_offsets_ptr = radiation_offsets.dataPtr();
+
+        amrex::ParallelFor(np, [=] AMREX_GPU_DEVICE (long ip)
+        {
+            amrex::ParticleReal xp, yp, zp;
+            getPosition(ip, xp, yp, zp);
+
+            bool add_fourier_radiation = true;
+            Real const uxp = ux[ip] / PhysConst::c;
+            Real const uyp = uy[ip] / PhysConst::c;
+            Real const uzp = uz[ip] / PhysConst::c;
+            if (radiation_do_particle_filter) {
+                const bool particle_filter_passes =
+                    radiation_particle_filter(radiation_time, xp, yp, zp, uxp, uyp, uzp, w[ip])
+                    != 0._rt;
+                if (radiation_particle_filter_is_latched) {
+                    if (particle_filter_passes) {
+                        fourier_radiation_tracked[ip] = 1;
+                    }
+                    add_fourier_radiation = fourier_radiation_tracked[ip] != 0;
+                } else if (!particle_filter_passes) {
+                    add_fourier_radiation = false;
+                }
+            }
+            if (add_fourier_radiation && radiation_particle_fraction < 1._rt) {
+                uint64_t hash = idcpu[ip] + 0x9e3779b97f4a7c15ULL;
+                hash = (hash ^ (hash >> 30)) * 0xbf58476d1ce4e5b9ULL;
+                hash = (hash ^ (hash >> 27)) * 0x94d049bb133111ebULL;
+                hash = hash ^ (hash >> 31);
+                constexpr Real inv_uint64_range = 1._rt / 18446744073709551616.0_rt;
+                add_fourier_radiation =
+                    static_cast<Real>(hash) * inv_uint64_range < radiation_particle_fraction;
+            }
+
+            radiation_mask_ptr[ip] = add_fourier_radiation ? 1 : 0;
+        });
+
+        const auto num_radiating_particles =
+            amrex::Scan::ExclusiveSum(np, radiation_mask_ptr, radiation_offsets_ptr);
+        if (num_radiating_particles <= 0) {
+            continue;
+        }
+
+        Gpu::DeviceVector<FourierRadiationParticleRecord> radiation_records(
+            num_radiating_particles);
+        FourierRadiationParticleRecord* const AMREX_RESTRICT radiation_records_ptr =
+            radiation_records.dataPtr();
+
+        amrex::ParallelFor(np, [=] AMREX_GPU_DEVICE (long ip)
+        {
+            if (radiation_mask_ptr[ip] != 0) {
+                amrex::ParticleReal xp, yp, zp;
+                getPosition(ip, xp, yp, zp);
+#if defined(WARPX_DIM_RZ)
+                amrex::ParticleReal const x_prev = x_old[ip] * std::cos(y_old[ip]);
+                amrex::ParticleReal const y_prev = x_old[ip] * std::sin(y_old[ip]);
+                amrex::ParticleReal const z_prev = z_old[ip];
+#elif defined(WARPX_DIM_3D)
+                amrex::ParticleReal const x_prev = x_old[ip];
+                amrex::ParticleReal const y_prev = y_old[ip];
+                amrex::ParticleReal const z_prev = z_old[ip];
+#else
+                amrex::ParticleReal const x_prev = x_old[ip];
+                amrex::ParticleReal const y_prev = 0._prt;
+                amrex::ParticleReal const z_prev = z_old[ip];
+#endif
+
+                const int record_i = radiation_offsets_ptr[ip];
+                radiation_records_ptr[record_i] = FourierRadiationParticleRecord{
+                    0.5_rt * (x_prev + xp),
+                    0.5_rt * (y_prev + yp),
+                    0.5_rt * (z_prev + zp),
+                    ux_old[ip],
+                    uy_old[ip],
+                    uz_old[ip],
+                    ux[ip],
+                    uy[ip],
+                    uz[ip],
+                    w[ip]};
+            }
+        });
+
+        Gpu::HostVector<FourierRadiationParticleRecord> host_records(
+            num_radiating_particles);
+        Gpu::copy(
+            Gpu::deviceToHost,
+            radiation_records.begin(),
+            radiation_records.end(),
+            host_records.begin());
+        local_records.insert(local_records.end(), host_records.begin(), host_records.end());
+    }
+
+    fourier_radiation->FlushParticleRecords(
+        local_records.data(),
+        static_cast<Long>(local_records.size()),
+        dt,
+        this->m_charge,
+        radiation_time);
+}
+
 /* \brief Perform the field gather and particle push operations in one fused kernel
  *
  */
@@ -1455,7 +1624,7 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
 #if !defined(WARPX_DIM_1D_Z)
         x_old = pti.GetAttribs("prev_x").dataPtr() + offset;
 #endif
-#if defined(WARPX_DIM_3D)
+#if defined(WARPX_DIM_3D) || defined(WARPX_DIM_RZ)
         y_old = pti.GetAttribs("prev_y").dataPtr() + offset;
 #endif
 #if defined(WARPX_ZINDEX)
@@ -1467,7 +1636,22 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
         m_do_fourier_radiation &&
         (position_push_type == PositionPushType::Full) &&
         (momentum_push_type == MomentumPushType::Full);
+    auto* fourier_radiation = WarpX::GetInstance().GetFourierRadiation();
+    const bool radiation_use_immediate_accumulation =
+        do_fourier_radiation && fourier_radiation->UseImmediateLocalAccumulation();
     if (do_fourier_radiation) {
+        if (!radiation_use_immediate_accumulation) {
+#if !defined(WARPX_DIM_1D_Z)
+            x_old = pti.GetAttribs("prev_x").dataPtr() + offset;
+#endif
+#if defined(WARPX_DIM_3D) || defined(WARPX_DIM_RZ)
+            y_old = pti.GetAttribs("prev_y").dataPtr() + offset;
+#endif
+#if defined(WARPX_ZINDEX)
+            z_old = pti.GetAttribs("prev_z").dataPtr() + offset;
+#endif
+        }
+        amrex::ignore_unused(x_old, y_old, z_old);
         ux_old = pti.GetAttribs("prev_ux").dataPtr() + offset;
         uy_old = pti.GetAttribs("prev_uy").dataPtr() + offset;
         uz_old = pti.GetAttribs("prev_uz").dataPtr() + offset;
@@ -1477,7 +1661,6 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
         }
     }
 
-    auto* fourier_radiation = WarpX::GetInstance().GetFourierRadiation();
     const Real radiation_time = WarpX::GetInstance().gett_new(lev);
     const bool radiation_do_particle_filter =
         (do_fourier_radiation) ? fourier_radiation->DoParticleFilter() : false;
@@ -1487,14 +1670,14 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
         (do_fourier_radiation) ? fourier_radiation->ParticleFilterFunction()
                                : amrex::ParserExecutor<8>{};
     const Real radiation_particle_fraction =
-        (do_fourier_radiation) ? fourier_radiation->ParticleFraction() : 1._rt;
+        (radiation_use_immediate_accumulation) ? fourier_radiation->ParticleFraction() : 1._rt;
     amrex::Gpu::AsyncVector<Real> radiation_x_prev_vec;
     amrex::Gpu::AsyncVector<Real> radiation_y_prev_vec;
     amrex::Gpu::AsyncVector<Real> radiation_z_prev_vec;
     Real* AMREX_RESTRICT radiation_x_prev = nullptr;
     Real* AMREX_RESTRICT radiation_y_prev = nullptr;
     Real* AMREX_RESTRICT radiation_z_prev = nullptr;
-    if (do_fourier_radiation) {
+    if (radiation_use_immediate_accumulation) {
         radiation_x_prev_vec.resize(np_to_push);
         radiation_y_prev_vec.resize(np_to_push);
         radiation_z_prev_vec.resize(np_to_push);
@@ -1547,22 +1730,40 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
     {
         amrex::ParticleReal xp, yp, zp;
         getPosition(ip, xp, yp, zp);
+        amrex::ParticleReal xp_stored = xp;
+        amrex::ParticleReal yp_stored = yp;
+        amrex::ParticleReal zp_stored = zp;
+#if defined(WARPX_DIM_RZ)
+        getPosition.AsStored(ip, xp_stored, yp_stored, zp_stored);
+#endif
 
         if (save_previous_position) {
 #if !defined(WARPX_DIM_1D_Z)
-            x_old[ip] = xp;
+            x_old[ip] = xp_stored;
 #endif
 #if defined(WARPX_DIM_3D)
-            y_old[ip] = yp;
+            y_old[ip] = yp_stored;
 #endif
 #if defined(WARPX_ZINDEX)
-            z_old[ip] = zp;
+            z_old[ip] = zp_stored;
 #endif
         }
-        if (do_fourier_radiation) {
+        if (radiation_use_immediate_accumulation) {
             radiation_x_prev[ip] = xp;
             radiation_y_prev[ip] = yp;
             radiation_z_prev[ip] = zp;
+        } else if (do_fourier_radiation) {
+#if !defined(WARPX_DIM_1D_Z)
+            x_old[ip] = xp_stored;
+#endif
+#if defined(WARPX_DIM_3D) || defined(WARPX_DIM_RZ)
+            y_old[ip] = yp_stored;
+#endif
+#if defined(WARPX_ZINDEX)
+            z_old[ip] = zp_stored;
+#endif
+        }
+        if (do_fourier_radiation) {
             ux_old[ip] = ux[ip];
             uy_old[ip] = uy[ip];
             uz_old[ip] = uz[ip];
@@ -1644,7 +1845,7 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
 #endif
     });
 
-    if (do_fourier_radiation) {
+    if (radiation_use_immediate_accumulation) {
         constexpr long particles_per_radiation_chunk = 128;
         constexpr std::size_t radiation_partial_workspace_bytes = 64u * 1024u * 1024u;
 

@@ -213,6 +213,11 @@ public:
 
     void SplitParticles (int lev);
 
+    void AccumulateFourierRadiationRecords (
+        int lev,
+        amrex::Real dt,
+        amrex::Real radiation_time);
+
     IonizationFilterFunc getIonizationFunc (const WarpXParIter& pti,
                                             int lev,
                                             amrex::IntVect ngEB,

@@ -91,8 +91,23 @@ public:
         return m_particle_filter_function;
     }
     [[nodiscard]] amrex::Real ParticleFraction () const { return m_particle_fraction; }
+    [[nodiscard]] bool UseImmediateLocalAccumulation () const;
+
+    void FlushParticleRecords (
+        FourierRadiationParticleRecord const* local_records,
+        amrex::Long num_local_records,
+        amrex::Real dt,
+        amrex::Real charge,
+        amrex::Real radiation_time);
 
 private:
+    enum class WorkDistribution
+    {
+        Local,
+        Balanced,
+        Auto
+    };
+
     void Allocate ();
 
     bool m_enabled = false;
@@ -112,9 +127,12 @@ private:
     amrex::Real m_phi_min = 0.0;
     amrex::Real m_phi_max = 0.0;
     amrex::Real m_particle_fraction = 1.0;
+    amrex::Real m_work_distribution_imbalance_threshold = 2.0;
     bool m_do_particle_filter = false;
     bool m_particle_filter_is_latched = false;
+    bool m_work_distribution_stats = false;
     std::string m_omega_grid = "linear";
+    WorkDistribution m_work_distribution = WorkDistribution::Balanced;
     std::unique_ptr<amrex::Parser> m_particle_filter_parser;
     amrex::ParserExecutor<8> m_particle_filter_function;
 
