@@ -264,7 +264,7 @@ void DefaultInitializeRuntimeAttributes (PTile& ptile,
             if (it_fourier_rad_tracked != particle_icomps.end() &&
                 std::distance(particle_icomps.begin(), it_fourier_rad_tracked) == j)
             {
-                if (run_on_gpu) {
+                if constexpr (amrex::RunOnGpu<typename PTile::template AllocatorType<int>>::value) {
                     amrex::ParallelFor(stop - start,
                                        [=] AMREX_GPU_DEVICE (int i) noexcept {
                                            const int ip = i + start;

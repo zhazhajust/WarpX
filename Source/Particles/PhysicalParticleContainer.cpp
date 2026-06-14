@@ -1491,7 +1491,7 @@ PhysicalParticleContainer::AccumulateFourierRadiationRecords (
         local_records.data(),
         static_cast<Long>(local_records.size()),
         dt,
-        this->m_charge,
+        this->charge,
         radiation_time);
 }
 
@@ -1819,12 +1819,12 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
         [[maybe_unused]] auto foo_local_has_quantum_sync = local_has_quantum_sync;
         [[maybe_unused]] auto *foo_podq = p_optical_depth_QSR;
         [[maybe_unused]] const auto& foo_evolve_opt = evolve_opt; // have to do all these for nvcc
-        [[maybe_unused]] auto foo_qed_dt = qed_dt;
+        [[maybe_unused]] auto foo_qed_dt = dt;
         if constexpr (qed_control == has_qed) {
             if (local_has_quantum_sync) {
                 evolve_opt(ux[ip], uy[ip], uz[ip],
                            Exp, Eyp, Ezp,Bxp, Byp, Bzp,
-                           qed_dt, p_optical_depth_QSR[ip]);
+                           dt, p_optical_depth_QSR[ip]);
             }
         }
 #else
