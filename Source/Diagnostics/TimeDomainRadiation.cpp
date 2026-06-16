@@ -6,6 +6,7 @@
  */
 #include "TimeDomainRadiation.H"
 
+#include "Utils/Parser/ParserUtils.H"
 #include "Utils/TextMsg.H"
 
 #include <AMReX_Gpu.H>
@@ -61,6 +62,21 @@ TimeDomainRadiation::TimeDomainRadiation ()
     pp_rd.get("radius", m_radius);
     pp_rd.query("far_field_approx", m_far_field_approx);
     pp_rd.query("reset_after_output", m_reset_after_output);
+    pp_rd.query("filter_random_fraction", m_filter_random_fraction);
+    pp_rd.query("filter_unistride", m_filter_unistride);
+    pp_rd.query("filter.random_fraction", m_filter_random_fraction);
+    pp_rd.query("filter.unistride", m_filter_unistride);
+
+    std::string filter_function;
+    m_filter_do_function = pp_rd.query(
+        "filter.function(t,x,y,z,ux,uy,uz)", filter_function);
+    if (m_filter_do_function) {
+        utils::parser::Store_parserString(
+            pp_rd, "filter.function(t,x,y,z,ux,uy,uz)", filter_function);
+        m_filter_parser = std::make_unique<amrex::Parser>(
+            utils::parser::makeParser(
+                filter_function, {"t", "x", "y", "z", "ux", "uy", "uz"}));
+    }
 
     WARPX_ALWAYS_ASSERT_WITH_MESSAGE(!m_species_names.empty(),
         "TimeDomainRadiation requires at least one species.");
@@ -70,6 +86,11 @@ TimeDomainRadiation::TimeDomainRadiation ()
         "TimeDomainRadiation requires time_max > time_min.");
     WARPX_ALWAYS_ASSERT_WITH_MESSAGE(m_radius > amrex::Real(0),
         "TimeDomainRadiation radius must be positive.");
+    WARPX_ALWAYS_ASSERT_WITH_MESSAGE(m_filter_unistride > 0,
+        "TimeDomainRadiation filter_unistride must be positive.");
+    WARPX_ALWAYS_ASSERT_WITH_MESSAGE(
+        m_filter_random_fraction >= amrex::Real(0) && m_filter_random_fraction <= amrex::Real(1),
+        "TimeDomainRadiation filter_random_fraction must be in [0, 1].");
 
     m_dt_screen = (m_time_max - m_time_min) / (m_n_time - 1);
     m_dtheta = (m_n_theta > 1)

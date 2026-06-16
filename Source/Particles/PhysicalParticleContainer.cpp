@@ -21,6 +21,7 @@
 #   include "Particles/ElementaryProcess/QEDInternals/QuantumSyncEngineWrapper.H"
 #endif
 #include "Particles/Deposition/TemperatureDeposition.H"
+#include "Particles/Filter/FilterFunctors.H"
 #include "Particles/Gather/FieldGather.H"
 #include "Particles/Gather/GetExternalFields.H"
 #include "Particles/ParticleCreation/DefaultInitialization.H"
@@ -1635,8 +1636,45 @@ PhysicalParticleContainer::AccumulateTimeDomainRadiation (
         pti.GetAttribs("prev_z").dataPtr() + offset;
 
     ParticleReal const q = this->charge;
-    amrex::ParallelFor(np_to_push, [=] AMREX_GPU_DEVICE (long ip) noexcept
+    if (!radiation->DoParticleFilter()) {
+        amrex::ParallelFor(np_to_push, [=] AMREX_GPU_DEVICE (long ip) noexcept
+        {
+            ParticleReal x, y, z;
+            getPosition(ip, x, y, z);
+
+            ParticleReal const ux_norm = ux[ip] / PhysConst::c;
+            ParticleReal const uy_norm = uy[ip] / PhysConst::c;
+            ParticleReal const uz_norm = uz[ip] / PhysConst::c;
+
+            ParticleReal const ux_prev_norm = ux_prev[ip] / PhysConst::c;
+            ParticleReal const uy_prev_norm = uy_prev[ip] / PhysConst::c;
+            ParticleReal const uz_prev_norm = uz_prev[ip] / PhysConst::c;
+
+            warpx::diagnostics::time_domain_radiation::accumulate_particle(
+                data, x, y, z, x_prev[ip], y_prev[ip], z_prev[ip],
+                ux_norm, uy_norm, uz_norm, ux_prev_norm, uy_prev_norm, uz_prev_norm,
+                time, dt, q * wp[ip]);
+        });
+        return;
+    }
+
+    RandomFilter const random_filter(
+        radiation->FilterRandomFraction() < amrex::Real(1), radiation->FilterRandomFraction());
+    UniformFilter const uniform_filter(
+        radiation->FilterUnistride() > 1, radiation->FilterUnistride());
+    ParserFilter const parser_filter(
+        radiation->FilterDoFunction(),
+        utils::parser::compileParser<7>(radiation->FilterParser()), this->m_mass, time);
+    auto const ptd = pti.GetParticleTile().getConstParticleTileData();
+    amrex::ParallelForRNG(np_to_push,
+    [=] AMREX_GPU_DEVICE (long ip, amrex::RandomEngine const& engine) noexcept
     {
+        auto const p = ptd.getSuperParticle(ip + offset);
+        if (!random_filter(p, engine) || !uniform_filter(p, engine) ||
+            !parser_filter(p, engine)) {
+            return;
+        }
+
         ParticleReal x, y, z;
         getPosition(ip, x, y, z);
 

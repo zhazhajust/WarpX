@@ -10,9 +10,11 @@
 #include "Diagnostics/TimeDomainRadiation_K.H"
 
 #include <AMReX_GpuContainers.H>
+#include <AMReX_Parser.H>
 #include <AMReX_REAL.H>
 #include <AMReX_Vector.H>
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -30,6 +32,14 @@ public:
     [[nodiscard]] int NumPhi () const { return m_n_phi; }
     [[nodiscard]] int NumComponents () const { return m_n_components; }
     [[nodiscard]] int NumGridNodes () const { return m_num_grid_nodes; }
+    [[nodiscard]] amrex::Real FilterRandomFraction () const { return m_filter_random_fraction; }
+    [[nodiscard]] int FilterUnistride () const { return m_filter_unistride; }
+    [[nodiscard]] bool FilterDoFunction () const { return m_filter_do_function; }
+    [[nodiscard]] amrex::Parser const* FilterParser () const { return m_filter_parser.get(); }
+    [[nodiscard]] bool DoParticleFilter () const {
+        return m_filter_random_fraction < amrex::Real(1) ||
+            m_filter_unistride > 1 || m_filter_do_function;
+    }
 
     [[nodiscard]] amrex::Real Time (int i) const { return m_time_min + i*m_dt_screen; }
     [[nodiscard]] amrex::Real Theta (int i) const { return m_theta_min + i*m_dtheta; }
@@ -61,6 +71,10 @@ private:
     amrex::Real m_dt_screen = amrex::Real(1);
     amrex::Real m_dtheta = amrex::Real(1);
     amrex::Real m_dphi = amrex::Real(1);
+    amrex::Real m_filter_random_fraction = amrex::Real(1);
+    int m_filter_unistride = 1;
+    bool m_filter_do_function = false;
+    std::unique_ptr<amrex::Parser> m_filter_parser;
     amrex::Vector<std::string> m_species_names;
 
     amrex::Gpu::DeviceVector<amrex::Real> m_field;
