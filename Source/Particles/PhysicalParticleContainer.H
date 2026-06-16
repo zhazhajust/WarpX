@@ -111,6 +111,9 @@ public:
                  MomentumPushType momentum_push_type=MomentumPushType::Full,
                  ImplicitOptions const * implicit_options = nullptr) override;
 
+    void AccumulateTimeDomainRadiation (
+        WarpXParIter& pti, long offset, long np_to_push, amrex::Real time, amrex::Real dt);
+
     /**
      * \brief Deposit mass matrices.
      */
@@ -489,6 +492,7 @@ protected:
 
     // A flag to enable saving of the previous timestep positions
     bool m_save_previous_position = false;
+    bool m_do_time_domain_radiation = false;
 
     // Flag controlling whether or not variance and then temperatures are computed per species
     bool m_do_temperature_deposition = false;

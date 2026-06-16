@@ -10,6 +10,7 @@
  */
 #include "PhysicalParticleContainer.H"
 
+#include "Diagnostics/TimeDomainRadiation.H"
 #include "Fields.H"
 #include "Filter/NCIGodfreyFilter.H"
 #include "Initialization/PlasmaInjector.H"
@@ -309,7 +310,13 @@ PhysicalParticleContainer::PhysicalParticleContainer (AmrCore* amr_core, int isp
     }
 
     // If old particle positions should be saved add the needed components
+    auto* time_domain_radiation = WarpX::GetInstance().GetTimeDomainRadiation();
+    if (time_domain_radiation && time_domain_radiation->IsSpeciesSelected(species_name)) {
+        m_do_time_domain_radiation = true;
+    }
+
     pp_species_name.query("save_previous_position", m_save_previous_position);
+    m_save_previous_position = m_save_previous_position || m_do_time_domain_radiation;
     if (m_save_previous_position) {
 #if !defined(WARPX_DIM_1D_Z)
         AddRealComp("prev_x");
@@ -323,6 +330,11 @@ PhysicalParticleContainer::PhysicalParticleContainer (AmrCore* amr_core, int isp
 #if defined(WARPX_DIM_RZ) || defined(WARPX_DIM_RCYLINDER) || defined(WARPX_DIM_RSPHERE)
       amrex::Abort("Saving previous particle positions not yet implemented in RZ");
 #endif
+    }
+    if (m_do_time_domain_radiation) {
+        AddRealComp("prev_ux");
+        AddRealComp("prev_uy");
+        AddRealComp("prev_uz");
     }
 
     // Read reflection models for absorbing boundaries; defaults to a zero
@@ -447,7 +459,7 @@ void
 PhysicalParticleContainer::Evolve (ablastr::fields::MultiFabRegister& fields,
                                    int lev,
                                    const std::string& current_fp_string,
-                                   Real /*t*/, Real dt, SubcyclingHalf subcycling_half, bool skip_deposition,
+                                   Real t, Real dt, SubcyclingHalf subcycling_half, bool skip_deposition,
                                    PositionPushType position_push_type,
                                    MomentumPushType momentum_push_type,
                                    ImplicitOptions const * implicit_options)
@@ -610,6 +622,12 @@ PhysicalParticleContainer::Evolve (ablastr::fields::MultiFabRegister& fields,
                            bxfab, byfab, bzfab,
                            Ex.nGrowVect(), e_is_nodal,
                            0, np_to_push, lev, gather_lev, dt, ScaleFields(false), subcycling_half, position_push_type, momentum_push_type);
+                    if (m_do_time_domain_radiation &&
+                        position_push_type == PositionPushType::Full &&
+                        momentum_push_type == MomentumPushType::Full)
+                    {
+                        AccumulateTimeDomainRadiation(pti, 0, np_to_push, t + dt, dt);
+                    }
                 } else if (push_type == PushType::Implicit) {
                     long const offset = 0;
                     if (implicit_options->evolve_suborbit_particles_only) {
@@ -669,6 +687,12 @@ PhysicalParticleContainer::Evolve (ablastr::fields::MultiFabRegister& fields,
                                cEx.nGrowVect(), e_is_nodal,
                                nfine_gather, np-nfine_gather,
                                lev, lev-1, dt, ScaleFields(false), subcycling_half, position_push_type, momentum_push_type);
+                        if (m_do_time_domain_radiation &&
+                            position_push_type == PositionPushType::Full &&
+                            momentum_push_type == MomentumPushType::Full)
+                        {
+                            AccumulateTimeDomainRadiation(pti, nfine_gather, np-nfine_gather, t + dt, dt);
+                        }
                     } else if (push_type == PushType::Implicit) {
                         if (implicit_options->evolve_suborbit_particles_only) {
                             FindSuborbitParticles(pti, nfine_gather, np-nfine_gather,
@@ -1416,6 +1440,7 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
     }
 
     const bool save_previous_position = m_save_previous_position;
+    const bool save_time_domain_radiation = m_do_time_domain_radiation;
     ParticleReal* x_old = nullptr;
     ParticleReal* y_old = nullptr;
     ParticleReal* z_old = nullptr;
@@ -1430,6 +1455,14 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
         z_old = pti.GetAttribs("prev_z").dataPtr() + offset;
 #endif
         amrex::ignore_unused(x_old, y_old, z_old);
+    }
+    ParticleReal* ux_old = nullptr;
+    ParticleReal* uy_old = nullptr;
+    ParticleReal* uz_old = nullptr;
+    if (save_time_domain_radiation) {
+        ux_old = pti.GetAttribs("prev_ux").dataPtr() + offset;
+        uy_old = pti.GetAttribs("prev_uy").dataPtr() + offset;
+        uz_old = pti.GetAttribs("prev_uz").dataPtr() + offset;
     }
 
     // local copies for device lambda capture
@@ -1485,6 +1518,11 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
 #if defined(WARPX_ZINDEX)
             z_old[ip] = zp;
 #endif
+        }
+        if (save_time_domain_radiation) {
+            ux_old[ip] = ux[ip];
+            uy_old[ip] = uy[ip];
+            uz_old[ip] = uz[ip];
         }
 
         amrex::ParticleReal Exp = Ex_external_particle;
@@ -1561,6 +1599,61 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
             amrex::ignore_unused(qed_control);
 #endif
     });
+}
+
+void
+PhysicalParticleContainer::AccumulateTimeDomainRadiation (
+    WarpXParIter& pti, long const offset, long const np_to_push, Real const time, Real const dt)
+{
+    auto* radiation = WarpX::GetInstance().GetTimeDomainRadiation();
+    if (radiation == nullptr || !radiation->Enabled() || np_to_push == 0) {
+        return;
+    }
+
+#if !defined(WARPX_DIM_3D)
+    amrex::ignore_unused(pti, offset, np_to_push, time, dt);
+#else
+    auto const data = radiation->GetDeviceData();
+    auto const getPosition = GetParticlePosition<PIdx>(pti, offset);
+
+    auto& attribs = pti.GetAttribs();
+    ParticleReal const* const AMREX_RESTRICT wp = attribs[PIdx::w].dataPtr() + offset;
+    ParticleReal const* const AMREX_RESTRICT ux = attribs[PIdx::ux].dataPtr() + offset;
+    ParticleReal const* const AMREX_RESTRICT uy = attribs[PIdx::uy].dataPtr() + offset;
+    ParticleReal const* const AMREX_RESTRICT uz = attribs[PIdx::uz].dataPtr() + offset;
+    ParticleReal const* const AMREX_RESTRICT ux_prev =
+        pti.GetAttribs("prev_ux").dataPtr() + offset;
+    ParticleReal const* const AMREX_RESTRICT uy_prev =
+        pti.GetAttribs("prev_uy").dataPtr() + offset;
+    ParticleReal const* const AMREX_RESTRICT uz_prev =
+        pti.GetAttribs("prev_uz").dataPtr() + offset;
+    ParticleReal const* const AMREX_RESTRICT x_prev =
+        pti.GetAttribs("prev_x").dataPtr() + offset;
+    ParticleReal const* const AMREX_RESTRICT y_prev =
+        pti.GetAttribs("prev_y").dataPtr() + offset;
+    ParticleReal const* const AMREX_RESTRICT z_prev =
+        pti.GetAttribs("prev_z").dataPtr() + offset;
+
+    ParticleReal const q = this->charge;
+    amrex::ParallelFor(np_to_push, [=] AMREX_GPU_DEVICE (long ip) noexcept
+    {
+        ParticleReal x, y, z;
+        getPosition(ip, x, y, z);
+
+        ParticleReal const ux_norm = ux[ip] / PhysConst::c;
+        ParticleReal const uy_norm = uy[ip] / PhysConst::c;
+        ParticleReal const uz_norm = uz[ip] / PhysConst::c;
+
+        ParticleReal const ux_prev_norm = ux_prev[ip] / PhysConst::c;
+        ParticleReal const uy_prev_norm = uy_prev[ip] / PhysConst::c;
+        ParticleReal const uz_prev_norm = uz_prev[ip] / PhysConst::c;
+
+        warpx::diagnostics::time_domain_radiation::accumulate_particle(
+            data, x, y, z, x_prev[ip], y_prev[ip], z_prev[ip],
+            ux_norm, uy_norm, uz_norm, ux_prev_norm, uy_prev_norm, uz_prev_norm,
+            time, dt, q * wp[ip]);
+    });
+#endif
 }
 
 void

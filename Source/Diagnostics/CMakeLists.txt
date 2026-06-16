@@ -7,6 +7,7 @@ foreach(D IN LISTS WarpX_DIMS)
         FullDiagnostics.cpp
         MultiDiagnostics.cpp
         ParticleIO.cpp
+        TimeDomainRadiation.cpp
         WarpXIO.cpp
         WarpXOpenPMD.cpp
         BTDiagnostics.cpp

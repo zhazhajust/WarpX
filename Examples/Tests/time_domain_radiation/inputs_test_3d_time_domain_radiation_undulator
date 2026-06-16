@@ -1,0 +1,60 @@
+max_step = 256
+amr.n_cell = 8 8 64
+amr.max_level = 0
+geometry.dims = 3
+geometry.prob_lo = -20.0e-6 -20.0e-6 -120.0e-6
+geometry.prob_hi =  20.0e-6  20.0e-6  140.0e-6
+
+my_constants.Bu = 1.0
+my_constants.lambda_u = 50.0e-6
+my_constants.k_u = 2.0*pi/lambda_u
+
+algo.maxwell_solver = Yee
+algo.particle_shape = 1
+
+warpx.const_dt = 2.5e-15
+warpx.random_seed = 42
+warpx.serialize_initial_conditions = 1
+warpx.reduced_diags_names = rad
+
+boundary.field_lo = periodic periodic periodic
+boundary.field_hi = periodic periodic periodic
+boundary.particle_lo = periodic periodic periodic
+boundary.particle_hi = periodic periodic periodic
+
+particles.species_names = beam
+particles.B_ext_particle_init_style = parse_B_ext_particle_function
+particles.Bx_external_particle_function(x,y,z,t) = 0.0
+particles.By_external_particle_function(x,y,z,t) = Bu*cos(k_u*z)
+particles.Bz_external_particle_function(x,y,z,t) = 0.0
+
+beam.charge = -q_e
+beam.mass = m_e
+beam.injection_style = gaussian_beam
+beam.x_rms = 1.0e-6
+beam.y_rms = 1.0e-6
+beam.z_rms = 2.0e-6
+beam.x_m = 0.0
+beam.y_m = 0.0
+beam.z_m = -80.0e-6
+beam.npart = 256
+beam.q_tot = -1.0e-12
+beam.momentum_distribution_type = constant
+beam.ux = 0.0
+beam.uy = 0.0
+beam.uz = 2.0
+
+rad.type = TimeDomainRadiation
+rad.intervals = 256
+rad.species = beam
+rad.n_time = 300
+rad.n_theta = 5
+rad.n_phi = 8
+rad.time_min = 1.5e-13
+rad.time_max = 4.5e-13
+rad.theta_min = 0.0
+rad.theta_max = 0.8
+rad.phi_min = 0.0
+rad.phi_max = 6.283185307179586
+rad.radius = 1.0
+rad.far_field_approx = 1

@@ -16,6 +16,7 @@
 #include "BoundaryConditions/PML.H"
 #include "Diagnostics/MultiDiagnostics.H"
 #include "Diagnostics/ReducedDiags/MultiReducedDiags.H"
+#include "Diagnostics/TimeDomainRadiation.H"
 #include "EmbeddedBoundary/Enabled.H"
 #include "EmbeddedBoundary/WarpXFaceInfoBox.H"
 #include "FieldSolver/ElectrostaticSolvers/ElectrostaticSolver.H"
@@ -347,6 +348,7 @@ WarpX::WarpX ()
     t_old.resize(nlevs_max, std::numeric_limits<Real>::lowest());
     dt.resize(nlevs_max, std::numeric_limits<Real>::max());
 
+    m_time_domain_radiation = std::make_unique<TimeDomainRadiation>();
     mypc = std::make_unique<MultiParticleContainer>(this);
 
     // Loop over species (particles and lasers)

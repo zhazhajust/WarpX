@@ -16,6 +16,7 @@
 #include "BoundaryConditions/PML_fwd.H"
 #include "Diagnostics/MultiDiagnostics_fwd.H"
 #include "Diagnostics/ReducedDiags/MultiReducedDiags_fwd.H"
+#include "Diagnostics/TimeDomainRadiation_fwd.H"
 #include "EmbeddedBoundary/WarpXFaceInfoBox_fwd.H"
 #include "FieldSolver/ElectrostaticSolvers/ElectrostaticSolver_fwd.H"
 #include "FieldSolver/FiniteDifferenceSolver/FiniteDifferenceSolver_fwd.H"
@@ -156,6 +157,7 @@ public:
     void ImplicitComputeRHSE (int lev, PatchType patch_type, amrex::Real dt, WarpXSolverVec& a_Erhs_vec);
 
     MultiParticleContainer& GetPartContainer () { return *mypc; }
+    TimeDomainRadiation* GetTimeDomainRadiation () { return m_time_domain_radiation.get(); }
     MultiFluidContainer& GetFluidContainer () { return *myfl; }
     ElectrostaticSolver& GetElectrostaticSolver () {return *m_electrostatic_solver;}
     [[nodiscard]] HybridPICModel * get_pointer_HybridPICModel () const { return m_hybrid_pic_model.get(); }
@@ -1168,6 +1170,7 @@ private:
 
     // Particle container
     std::unique_ptr<MultiParticleContainer> mypc;
+    std::unique_ptr<TimeDomainRadiation> m_time_domain_radiation;
     std::unique_ptr<MultiDiagnostics> multi_diags;
 
     // Particle thermalizer configuration (constructed from inputs)

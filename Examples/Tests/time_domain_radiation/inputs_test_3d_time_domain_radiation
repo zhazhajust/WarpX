@@ -1,0 +1,43 @@
+max_step = 4
+amr.n_cell = 8 8 8
+amr.max_level = 0
+geometry.dims = 3
+geometry.prob_lo = -1.0e-3 -1.0e-3 -1.0e-3
+geometry.prob_hi =  1.0e-3  1.0e-3  1.0e-3
+
+algo.maxwell_solver = Yee
+algo.particle_shape = 1
+
+warpx.const_dt = 1.0e-12
+warpx.reduced_diags_names = rad
+
+boundary.field_lo = periodic periodic periodic
+boundary.field_hi = periodic periodic periodic
+boundary.particle_lo = periodic periodic periodic
+boundary.particle_hi = periodic periodic periodic
+
+particles.species_names = electron
+particles.B_ext_particle_init_style = constant
+particles.B_external_particle = 0.0 0.0 1.0
+
+electron.charge = -q_e
+electron.mass = m_e
+electron.injection_style = SingleParticle
+electron.single_particle_pos = 0.0 0.0 0.0
+electron.single_particle_u = 0.3 0.0 0.0
+electron.single_particle_weight = 1.0
+
+rad.type = TimeDomainRadiation
+rad.intervals = 4
+rad.species = electron
+rad.n_time = 8
+rad.n_theta = 3
+rad.n_phi = 4
+rad.time_min = -2.0e-12
+rad.time_max = 6.0e-12
+rad.theta_min = 0.2
+rad.theta_max = 2.8
+rad.phi_min = 0.0
+rad.phi_max = 4.71238898038469
+rad.radius = 1.0
+rad.far_field_approx = 1
