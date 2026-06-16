@@ -39,33 +39,43 @@ times = np.unique(data[:, 3])
 thetas = np.unique(data[:, 4])
 phis = np.unique(data[:, 5])
 
-signal = np.zeros((thetas.size * phis.size, times.size))
-for row in data:
-    it = np.where(times == row[3])[0][0]
-    ith = np.where(thetas == row[4])[0][0]
-    iph = np.where(phis == row[5])[0][0]
-    signal[ith * phis.size + iph, it] = row[7]
+phi_index = int(np.argmin(np.abs(phis)))
+components = ("Ex", "Ey", "Ez")
+theta_signals = []
+for component_index in range(3):
+    theta_signal = np.zeros((thetas.size, times.size))
+    for row in data:
+        if row[5] != phis[phi_index]:
+            continue
+        it = np.where(times == row[3])[0][0]
+        ith = np.where(thetas == row[4])[0][0]
+        theta_signal[ith, it] = row[6 + component_index]
+    theta_signals.append(theta_signal)
 
-vmax = np.max(np.abs(signal))
-angle_index = np.argmax(np.max(np.abs(signal), axis=1))
+component_index = int(np.argmax([np.max(np.abs(values)) for values in theta_signals]))
+component = components[component_index]
+theta_signal = theta_signals[component_index]
+
+vmax = np.max(np.abs(theta_signal))
+theta_index = np.argmax(np.max(np.abs(theta_signal), axis=1))
 
 fig, axes = plt.subplots(2, 1, figsize=(8, 6), constrained_layout=True)
 image = axes[0].imshow(
-    signal,
+    theta_signal,
     aspect="auto",
     origin="lower",
     cmap="bwr",
     vmin=-vmax,
     vmax=vmax,
-    extent=[times[0] * 1.0e15, times[-1] * 1.0e15, 0, signal.shape[0] - 1],
+    extent=[times[0] * 1.0e15, times[-1] * 1.0e15, thetas[0], thetas[-1]],
 )
 axes[0].set_xlabel("radiation time (fs)")
-axes[0].set_ylabel("observation angle index")
-axes[0].set_title("Time-domain radiation Ey")
-fig.colorbar(image, ax=axes[0], label="Ey (V/m)")
+axes[0].set_ylabel("theta (rad)")
+axes[0].set_title(f"Time-domain radiation {component}, phi = {phis[phi_index]:.3f} rad")
+fig.colorbar(image, ax=axes[0], label=f"{component} (V/m)")
 
-axes[1].plot(times * 1.0e15, signal[angle_index, :], color="black")
+axes[1].plot(times * 1.0e15, theta_signal[theta_index, :], color="black")
 axes[1].set_xlabel("radiation time (fs)")
-axes[1].set_ylabel("Ey (V/m)")
-axes[1].set_title(f"Strongest observation angle index: {angle_index}")
+axes[1].set_ylabel(f"{component} (V/m)")
+axes[1].set_title(f"Strongest theta: {thetas[theta_index]:.3f} rad")
 fig.savefig("time_domain_radiation.png", dpi=150)
