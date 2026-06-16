@@ -84,15 +84,19 @@ private:
 /**
  * \brief Functor that returns 0 or 1 depending on a parser selection
  */
+template <int N=7>
 struct ParserFilter
 {
+    static_assert(N == 7 || N == 8, "ParserFilter supports 7 or 8 parser arguments");
+
     /** constructor
      * \param a_is_active whether the test is active
-     * \param a_filter_parser parser taking t, x, y, z, ux, uy, and uz, and returning a boolean for selected particle
+     * \param a_filter_parser parser taking t, x, y, z, ux, uy, uz, and optionally w,
+     *        and returning a boolean for selected particle
      * \param a_mass mass of the particle species
      * \param time simulation time on the coarsest level
      */
-    ParserFilter(bool a_is_active, amrex::ParserExecutor<7> const& a_filter_parser,
+    ParserFilter(bool a_is_active, amrex::ParserExecutor<N> const& a_filter_parser,
         const amrex::ParticleReal a_mass, const amrex::Real time):
             m_is_active{a_is_active},
             m_function_partparser{a_filter_parser},
@@ -129,15 +133,19 @@ struct ParserFilter
 
             // This is actually a binary true/false (1/0) check,
             // but the parser returns floating point types
-            return (m_function_partparser(m_t,x,y,z,ux,uy,uz) != 0.0_rt);
+            if constexpr (N == 8) {
+                return (m_function_partparser(m_t,x,y,z,ux,uy,uz,p.rdata(PIdx::w)) != 0.0_rt);
+            } else {
+                return (m_function_partparser(m_t,x,y,z,ux,uy,uz) != 0.0_rt);
+            }
         }
     }
 private:
     /** Whether this diagnostics is activated. Select all particles if false */
     bool m_is_active;
 public:
-    /** Parser function with 7 input variables, t,x,y,z,ux,uy,uz */
-    amrex::ParserExecutor<7> m_function_partparser;
+    /** Parser function with 7 input variables, t,x,y,z,ux,uy,uz, or 8 including w */
+    amrex::ParserExecutor<N> m_function_partparser;
     /** Mass of particle species */
     amrex::ParticleReal m_mass;
     /** Store physical time on the coarsest level. */

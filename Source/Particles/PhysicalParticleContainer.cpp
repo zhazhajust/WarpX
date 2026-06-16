@@ -21,6 +21,7 @@
 #   include "Particles/ElementaryProcess/QEDInternals/QuantumSyncEngineWrapper.H"
 #endif
 #include "Particles/Deposition/TemperatureDeposition.H"
+#include "Particles/Filter/FilterFunctors.H"
 #include "Particles/Gather/FieldGather.H"
 #include "Particles/Gather/GetExternalFields.H"
 #include "Particles/ParticleCreation/DefaultInitialization.H"
@@ -1361,8 +1362,15 @@ PhysicalParticleContainer::AccumulateFourierRadiationRecords (
 
     const bool radiation_do_particle_filter = fourier_radiation->DoParticleFilter();
     const bool radiation_particle_filter_is_latched = m_fourier_radiation_filter_is_latched;
-    const auto radiation_particle_filter = fourier_radiation->ParticleFilterFunction();
-    const Real radiation_particle_fraction = fourier_radiation->ParticleFraction();
+    ParserFilter<8> const radiation_parser_filter(
+        radiation_do_particle_filter,
+        fourier_radiation->ParticleFilterFunction(),
+        m_mass,
+        radiation_time);
+    RandomFilter const radiation_random_filter(
+        fourier_radiation->ParticleFraction() < 1._rt,
+        fourier_radiation->ParticleFraction());
+    UniformFilter const radiation_uniform_filter(false, 1);
 
     Vector<FourierRadiationParticleRecord> local_records;
 
@@ -1373,10 +1381,9 @@ PhysicalParticleContainer::AccumulateFourierRadiationRecords (
             continue;
         }
 
+        auto const ptd = pti.GetParticleTile().getConstParticleTileData();
         const auto getPosition = GetParticlePosition<PIdx>(pti, 0);
         auto& attribs = pti.GetAttribs();
-        auto const& soa = pti.GetStructOfArrays();
-        uint64_t const* const AMREX_RESTRICT idcpu = soa.GetIdCPUData().data();
         ParticleReal const* const AMREX_RESTRICT ux = attribs[PIdx::ux].dataPtr();
         ParticleReal const* const AMREX_RESTRICT uy = attribs[PIdx::uy].dataPtr();
         ParticleReal const* const AMREX_RESTRICT uz = attribs[PIdx::uz].dataPtr();
@@ -1408,19 +1415,13 @@ PhysicalParticleContainer::AccumulateFourierRadiationRecords (
         int* const AMREX_RESTRICT radiation_mask_ptr = radiation_mask.dataPtr();
         int* const AMREX_RESTRICT radiation_offsets_ptr = radiation_offsets.dataPtr();
 
-        amrex::ParallelFor(np, [=] AMREX_GPU_DEVICE (long ip)
+        amrex::ParallelForRNG(np, [=] AMREX_GPU_DEVICE (
+            long ip, amrex::RandomEngine const& engine) noexcept
         {
-            amrex::ParticleReal xp, yp, zp;
-            getPosition(ip, xp, yp, zp);
-
             bool add_fourier_radiation = true;
-            Real const uxp = ux[ip] / PhysConst::c;
-            Real const uyp = uy[ip] / PhysConst::c;
-            Real const uzp = uz[ip] / PhysConst::c;
+            const SuperParticleType p = ptd.getSuperParticle(ip);
             if (radiation_do_particle_filter) {
-                const bool particle_filter_passes =
-                    radiation_particle_filter(radiation_time, xp, yp, zp, uxp, uyp, uzp, w[ip])
-                    != 0._rt;
+                const bool particle_filter_passes = radiation_parser_filter(p, engine);
                 if (radiation_particle_filter_is_latched) {
                     if (particle_filter_passes) {
                         fourier_radiation_tracked[ip] = 1;
@@ -1430,15 +1431,9 @@ PhysicalParticleContainer::AccumulateFourierRadiationRecords (
                     add_fourier_radiation = false;
                 }
             }
-            if (add_fourier_radiation && radiation_particle_fraction < 1._rt) {
-                uint64_t hash = idcpu[ip] + 0x9e3779b97f4a7c15ULL;
-                hash = (hash ^ (hash >> 30)) * 0xbf58476d1ce4e5b9ULL;
-                hash = (hash ^ (hash >> 27)) * 0x94d049bb133111ebULL;
-                hash = hash ^ (hash >> 31);
-                constexpr Real inv_uint64_range = 1._rt / 18446744073709551616.0_rt;
-                add_fourier_radiation =
-                    static_cast<Real>(hash) * inv_uint64_range < radiation_particle_fraction;
-            }
+            add_fourier_radiation = add_fourier_radiation
+                && radiation_random_filter(p, engine)
+                && radiation_uniform_filter(p, engine);
 
             radiation_mask_ptr[ip] = add_fourier_radiation ? 1 : 0;
         });
@@ -1595,8 +1590,7 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
     amrex::IndexType const bz_type = bzfab->box().ixType();
 
     auto& attribs = pti.GetAttribs();
-    auto const& soa = pti.GetStructOfArrays();
-    uint64_t const* const AMREX_RESTRICT idcpu = soa.GetIdCPUData().data() + offset;
+    auto const ptd = pti.GetParticleTile().getConstParticleTileData();
     ParticleReal* const AMREX_RESTRICT ux = attribs[PIdx::ux].dataPtr() + offset;
     ParticleReal* const AMREX_RESTRICT uy = attribs[PIdx::uy].dataPtr() + offset;
     ParticleReal* const AMREX_RESTRICT uz = attribs[PIdx::uz].dataPtr() + offset;
@@ -1666,11 +1660,16 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
         (do_fourier_radiation) ? fourier_radiation->DoParticleFilter() : false;
     const bool radiation_particle_filter_is_latched =
         do_fourier_radiation && m_fourier_radiation_filter_is_latched;
-    const auto radiation_particle_filter =
+    ParserFilter<8> const radiation_parser_filter(
+        radiation_do_particle_filter,
         (do_fourier_radiation) ? fourier_radiation->ParticleFilterFunction()
-                               : amrex::ParserExecutor<8>{};
-    const Real radiation_particle_fraction =
-        (radiation_use_immediate_accumulation) ? fourier_radiation->ParticleFraction() : 1._rt;
+                               : amrex::ParserExecutor<8>{},
+        m_mass,
+        radiation_time);
+    RandomFilter const radiation_random_filter(
+        radiation_use_immediate_accumulation && fourier_radiation->ParticleFraction() < 1._rt,
+        (do_fourier_radiation) ? fourier_radiation->ParticleFraction() : 1._rt);
+    UniformFilter const radiation_uniform_filter(false, 1);
     amrex::Gpu::AsyncVector<Real> radiation_x_prev_vec;
     amrex::Gpu::AsyncVector<Real> radiation_y_prev_vec;
     amrex::Gpu::AsyncVector<Real> radiation_z_prev_vec;
@@ -1853,19 +1852,13 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
         amrex::Gpu::AsyncVector<int> radiation_mask(np_to_push);
         int* const AMREX_RESTRICT radiation_mask_ptr = radiation_mask.dataPtr();
 
-        amrex::ParallelFor(np_to_push, [=] AMREX_GPU_DEVICE (long ip)
+        amrex::ParallelForRNG(np_to_push, [=] AMREX_GPU_DEVICE (
+            long ip, amrex::RandomEngine const& engine) noexcept
         {
-            amrex::ParticleReal xp, yp, zp;
-            getPosition(ip, xp, yp, zp);
-
             bool add_fourier_radiation = true;
-            const Real uxp = ux[ip] / PhysConst::c;
-            const Real uyp = uy[ip] / PhysConst::c;
-            const Real uzp = uz[ip] / PhysConst::c;
+            const SuperParticleType p = ptd.getSuperParticle(ip + offset);
             if (radiation_do_particle_filter) {
-                const bool particle_filter_passes =
-                    radiation_particle_filter(radiation_time, xp, yp, zp, uxp, uyp, uzp, w[ip])
-                    != 0._rt;
+                const bool particle_filter_passes = radiation_parser_filter(p, engine);
                 if (radiation_particle_filter_is_latched) {
                     if (particle_filter_passes) {
                         fourier_radiation_tracked[ip] = 1;
@@ -1875,15 +1868,9 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
                     add_fourier_radiation = false;
                 }
             }
-            if (add_fourier_radiation && radiation_particle_fraction < 1._rt) {
-                uint64_t hash = idcpu[ip] + 0x9e3779b97f4a7c15ULL;
-                hash = (hash ^ (hash >> 30)) * 0xbf58476d1ce4e5b9ULL;
-                hash = (hash ^ (hash >> 27)) * 0x94d049bb133111ebULL;
-                hash = hash ^ (hash >> 31);
-                constexpr Real inv_uint64_range = 1._rt / 18446744073709551616.0_rt;
-                add_fourier_radiation =
-                    static_cast<Real>(hash) * inv_uint64_range < radiation_particle_fraction;
-            }
+            add_fourier_radiation = add_fourier_radiation
+                && radiation_random_filter(p, engine)
+                && radiation_uniform_filter(p, engine);
 
             radiation_mask_ptr[ip] = add_fourier_radiation ? 1 : 0;
         });
