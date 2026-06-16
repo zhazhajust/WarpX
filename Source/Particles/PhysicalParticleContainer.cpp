@@ -1444,43 +1444,51 @@ PhysicalParticleContainer::AccumulateFourierRadiationRecords (
             continue;
         }
 
+        Gpu::AsyncVector<int> radiation_indices(num_radiating_particles);
+        int* const AMREX_RESTRICT radiation_indices_ptr = radiation_indices.dataPtr();
+
+        amrex::ParallelFor(np, [=] AMREX_GPU_DEVICE (long ip)
+        {
+            if (radiation_mask_ptr[ip] != 0) {
+                radiation_indices_ptr[radiation_offsets_ptr[ip]] = static_cast<int>(ip);
+            }
+        });
+
         Gpu::DeviceVector<FourierRadiationParticleRecord> radiation_records(
             num_radiating_particles);
         FourierRadiationParticleRecord* const AMREX_RESTRICT radiation_records_ptr =
             radiation_records.dataPtr();
 
-        amrex::ParallelFor(np, [=] AMREX_GPU_DEVICE (long ip)
+        amrex::ParallelFor(num_radiating_particles, [=] AMREX_GPU_DEVICE (long selected_i)
         {
-            if (radiation_mask_ptr[ip] != 0) {
-                amrex::ParticleReal xp, yp, zp;
-                getPosition(ip, xp, yp, zp);
+            const int ip = radiation_indices_ptr[selected_i];
+            amrex::ParticleReal xp, yp, zp;
+            getPosition(ip, xp, yp, zp);
 #if defined(WARPX_DIM_RZ)
-                amrex::ParticleReal const x_prev = x_old[ip] * std::cos(y_old[ip]);
-                amrex::ParticleReal const y_prev = x_old[ip] * std::sin(y_old[ip]);
-                amrex::ParticleReal const z_prev = z_old[ip];
+            amrex::ParticleReal const x_prev = x_old[ip] * std::cos(y_old[ip]);
+            amrex::ParticleReal const y_prev = x_old[ip] * std::sin(y_old[ip]);
+            amrex::ParticleReal const z_prev = z_old[ip];
 #elif defined(WARPX_DIM_3D)
-                amrex::ParticleReal const x_prev = x_old[ip];
-                amrex::ParticleReal const y_prev = y_old[ip];
-                amrex::ParticleReal const z_prev = z_old[ip];
+            amrex::ParticleReal const x_prev = x_old[ip];
+            amrex::ParticleReal const y_prev = y_old[ip];
+            amrex::ParticleReal const z_prev = z_old[ip];
 #else
-                amrex::ParticleReal const x_prev = x_old[ip];
-                amrex::ParticleReal const y_prev = 0._prt;
-                amrex::ParticleReal const z_prev = z_old[ip];
+            amrex::ParticleReal const x_prev = x_old[ip];
+            amrex::ParticleReal const y_prev = 0._prt;
+            amrex::ParticleReal const z_prev = z_old[ip];
 #endif
 
-                const int record_i = radiation_offsets_ptr[ip];
-                radiation_records_ptr[record_i] = FourierRadiationParticleRecord{
-                    0.5_rt * (x_prev + xp),
-                    0.5_rt * (y_prev + yp),
-                    0.5_rt * (z_prev + zp),
-                    ux_old[ip],
-                    uy_old[ip],
-                    uz_old[ip],
-                    ux[ip],
-                    uy[ip],
-                    uz[ip],
-                    w[ip]};
-            }
+            radiation_records_ptr[selected_i] = FourierRadiationParticleRecord{
+                0.5_rt * (x_prev + xp),
+                0.5_rt * (y_prev + yp),
+                0.5_rt * (z_prev + zp),
+                ux_old[ip],
+                uy_old[ip],
+                uz_old[ip],
+                ux[ip],
+                uy[ip],
+                uz[ip],
+                w[ip]};
         });
 
         Gpu::HostVector<FourierRadiationParticleRecord> host_records(
@@ -1850,7 +1858,9 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
 
         auto const radiation_data = fourier_radiation->GetDeviceData();
         amrex::Gpu::AsyncVector<int> radiation_mask(np_to_push);
+        amrex::Gpu::AsyncVector<int> radiation_offsets(np_to_push);
         int* const AMREX_RESTRICT radiation_mask_ptr = radiation_mask.dataPtr();
+        int* const AMREX_RESTRICT radiation_offsets_ptr = radiation_offsets.dataPtr();
 
         amrex::ParallelForRNG(np_to_push, [=] AMREX_GPU_DEVICE (
             long ip, amrex::RandomEngine const& engine) noexcept
@@ -1875,8 +1885,25 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
             radiation_mask_ptr[ip] = add_fourier_radiation ? 1 : 0;
         });
 
+        const auto num_radiating_particles =
+            amrex::Scan::ExclusiveSum(np_to_push, radiation_mask_ptr, radiation_offsets_ptr);
+        if (num_radiating_particles <= 0) {
+            return;
+        }
+
+        amrex::Gpu::AsyncVector<int> radiation_indices(num_radiating_particles);
+        int* const AMREX_RESTRICT radiation_indices_ptr = radiation_indices.dataPtr();
+
+        amrex::ParallelFor(np_to_push, [=] AMREX_GPU_DEVICE (long ip)
+        {
+            if (radiation_mask_ptr[ip] != 0) {
+                radiation_indices_ptr[radiation_offsets_ptr[ip]] = static_cast<int>(ip);
+            }
+        });
+
         const long num_chunks =
-            (np_to_push + particles_per_radiation_chunk - 1) / particles_per_radiation_chunk;
+            (num_radiating_particles + particles_per_radiation_chunk - 1)
+            / particles_per_radiation_chunk;
         const auto bytes_per_chunk = static_cast<std::size_t>(
             warpx::diagnostics::fourier_radiation::n_amp_components)
             * static_cast<std::size_t>(radiation_data.num_grid_nodes) * sizeof(Real);
@@ -1904,15 +1931,12 @@ PhysicalParticleContainer::PushPX (WarpXParIter& pti,
                 const long chunk = chunk_begin + local_chunk;
                 const long particle_begin = chunk * particles_per_radiation_chunk;
                 const long particle_end =
-                    (particle_begin + particles_per_radiation_chunk < np_to_push)
-                    ? particle_begin + particles_per_radiation_chunk : np_to_push;
+                    (particle_begin + particles_per_radiation_chunk < num_radiating_particles)
+                    ? particle_begin + particles_per_radiation_chunk : num_radiating_particles;
 
                 FourierRadiationAmplitude sum;
-                for (long ip = particle_begin; ip < particle_end; ++ip) {
-                    if (radiation_mask_ptr[ip] == 0) {
-                        continue;
-                    }
-
+                for (long selected_i = particle_begin; selected_i < particle_end; ++selected_i) {
+                    const int ip = radiation_indices_ptr[selected_i];
                     amrex::ParticleReal xp, yp, zp;
                     getPosition(ip, xp, yp, zp);
 
