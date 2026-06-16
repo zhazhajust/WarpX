@@ -1666,15 +1666,36 @@ PhysicalParticleContainer::AccumulateTimeDomainRadiation (
         radiation->FilterDoFunction(),
         utils::parser::compileParser<7>(radiation->FilterParser()), this->m_mass, time);
     auto const ptd = pti.GetParticleTile().getConstParticleTileData();
+
+    amrex::Gpu::DeviceVector<long> flags(np_to_push);
+    amrex::Gpu::DeviceVector<long> offsets(np_to_push);
+    amrex::Gpu::DeviceVector<long> selected_indices(np_to_push);
+
+    long* const AMREX_RESTRICT p_flags = flags.dataPtr();
+    long* const AMREX_RESTRICT p_offsets = offsets.dataPtr();
+    long* const AMREX_RESTRICT p_selected_indices = selected_indices.dataPtr();
+
     amrex::ParallelForRNG(np_to_push,
     [=] AMREX_GPU_DEVICE (long ip, amrex::RandomEngine const& engine) noexcept
     {
         auto const p = ptd.getSuperParticle(ip + offset);
-        if (!random_filter(p, engine) || !uniform_filter(p, engine) ||
-            !parser_filter(p, engine)) {
-            return;
-        }
+        p_flags[ip] = static_cast<long>(
+            random_filter(p, engine) && uniform_filter(p, engine) && parser_filter(p, engine));
+    });
 
+    long const num_selected = amrex::Scan::ExclusiveSum(
+        np_to_push, p_flags, p_offsets);
+
+    amrex::ParallelFor(np_to_push, [=] AMREX_GPU_DEVICE (long ip) noexcept
+    {
+        if (p_flags[ip] != 0) {
+            p_selected_indices[p_offsets[ip]] = ip;
+        }
+    });
+
+    amrex::ParallelFor(num_selected, [=] AMREX_GPU_DEVICE (long selected_ip) noexcept
+    {
+        long const ip = p_selected_indices[selected_ip];
         ParticleReal x, y, z;
         getPosition(ip, x, y, z);
 
